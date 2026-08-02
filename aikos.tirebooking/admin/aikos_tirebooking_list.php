@@ -16,7 +16,7 @@ if ($POST_RIGHT <= "D") {
 
 $APPLICATION->SetTitle("Отслеживание и мониторинг записей шиномонтажа");
 
-// Захват параметров фильтрации и пагинации
+// Параметры фильтрации и пагинации
 $dateFrom = trim($_REQUEST['DATE_FROM'] ?? '');
 $dateTo = trim($_REQUEST['DATE_TO'] ?? '');
 $centerId = isset($_REQUEST['CENTER_ID']) ? (int)$_REQUEST['CENTER_ID'] : 0;
@@ -28,12 +28,14 @@ $perPage = isset($_REQUEST['per_page']) ? max(10, (int)$_REQUEST['per_page']) : 
 $centers = CenterManager::getCenters();
 $selectedCenterName = $centers[$centerId] ?? '';
 
-// Получение исходного набора данных из инфоблока
-$allItems = BookingManager::getList([], ['ID' => 'DESC'], 2000);
+// Полное общее количество всех элементов инфоблока в БД (100,000+)
+$totalDbCount = BookingManager::getCount();
 
-// Полная фильтрация на основе переданных параметров
-$filteredItems = array_filter($allItems, function($item) use ($centerId, $selectedCenterName, $dateFrom, $dateTo, $searchQuery) {
-    // 1. Фильтр по Шинному центру
+// Загрузка активных элементов для анализа и отображения
+$allItems = BookingManager::getList([], ['ID' => 'DESC'], 5000);
+
+// Фильтрация по центру и поиску
+$baseFilteredItems = array_filter($allItems, function($item) use ($centerId, $selectedCenterName, $searchQuery) {
     if ($centerId > 0) {
         $itemCenterId = (int)$item['CENTER_ID'];
         $itemCenterName = mb_strtolower((string)$item['CENTER_NAME']);
@@ -43,11 +45,9 @@ $filteredItems = array_filter($allItems, function($item) use ($centerId, $select
             $match = true;
         } elseif ($selectedCenterName !== '') {
             $selectedLower = mb_strtolower($selectedCenterName);
-            // Проверка по совпадению наименования центра или города/улицы
             if ($itemCenterName !== '' && (strpos($itemCenterName, $selectedLower) !== false || strpos($selectedLower, $itemCenterName) !== false)) {
                 $match = true;
             } else {
-                // Извлекаем ключевую часть адреса (например "Актобе" или "Кенес Нокина")
                 $cityParts = explode(',', str_replace('г.', '', $selectedCenterName));
                 $cityName = trim($cityParts[0] ?? '');
                 if ($cityName !== '' && mb_strlen($cityName) > 3) {
@@ -60,22 +60,6 @@ $filteredItems = array_filter($allItems, function($item) use ($centerId, $select
         if (!$match) return false;
     }
 
-    // 2. Фильтр по диапазону дат (DATE_FROM / DATE_TO)
-    $itemDateStr = $item['DATE_TIME'] ?: $item['DATE_CREATE'];
-    if ($itemDateStr) {
-        $ts = strtotime($itemDateStr);
-        if ($ts > 0) {
-            $itemYmd = date('Y-m-d', $ts);
-            if ($dateFrom !== '' && $itemYmd < $dateFrom) {
-                return false;
-            }
-            if ($dateTo !== '' && $itemYmd > $dateTo) {
-                return false;
-            }
-        }
-    }
-
-    // 3. Поисковой фильтр (ФИО / Телефон / Госномер)
     if ($searchQuery !== '') {
         $q = mb_strtolower($searchQuery);
         $match = (
@@ -91,35 +75,77 @@ $filteredItems = array_filter($allItems, function($item) use ($centerId, $select
     return true;
 });
 
-// Переиндексация отфильтрованного массива
+// Временные метки
+$now = time();
+$todayStr = date('Y-m-d', $now);
+$tomorrowStr = date('Y-m-d', strtotime('+1 day', $now));
+
+$thisWeekStartStr = date('Y-m-d', strtotime('monday this week', $now));
+$thisWeekEndStr = date('Y-m-d', strtotime('sunday this week', $now));
+
+$nextWeekStartStr = date('Y-m-d', strtotime('monday next week', $now));
+$nextWeekEndStr = date('Y-m-d', strtotime('sunday next week', $now));
+
+// Подсчет временных карточек
+$periodStats = [
+    'total' => ($centerId == 0 && $searchQuery === '') ? $totalDbCount : count($baseFilteredItems),
+    'today' => 0,
+    'tomorrow' => 0,
+    'this_week' => 0,
+    'next_week' => 0
+];
+
+foreach ($baseFilteredItems as $it) {
+    $itemDateStr = $it['DATE_TIME'] ?: $it['DATE_CREATE'];
+    if (!$itemDateStr) continue;
+
+    $ts = strtotime($itemDateStr);
+    if (!$ts) continue;
+
+    $itemYmd = date('Y-m-d', $ts);
+
+    if ($itemYmd === $todayStr) {
+        $periodStats['today']++;
+    }
+    if ($itemYmd === $tomorrowStr) {
+        $periodStats['tomorrow']++;
+    }
+    if ($itemYmd >= $thisWeekStartStr && $itemYmd <= $thisWeekEndStr) {
+        $periodStats['this_week']++;
+    }
+    if ($itemYmd >= $nextWeekStartStr && $itemYmd <= $nextWeekEndStr) {
+        $periodStats['next_week']++;
+    }
+}
+
+// Фильтрация результирующего списка по выбору периода (DATE_FROM / DATE_TO)
+$filteredItems = array_filter($baseFilteredItems, function($item) use ($dateFrom, $dateTo) {
+    $itemDateStr = $item['DATE_TIME'] ?: $item['DATE_CREATE'];
+    if ($itemDateStr) {
+        $ts = strtotime($itemDateStr);
+        if ($ts > 0) {
+            $itemYmd = date('Y-m-d', $ts);
+            if ($dateFrom !== '' && $itemYmd < $dateFrom) {
+                return false;
+            }
+            if ($dateTo !== '' && $itemYmd > $dateTo) {
+                return false;
+            }
+        }
+    }
+    return true;
+});
+
+// Переиндексация массива
 $filteredItems = array_values($filteredItems);
 $totalFiltered = count($filteredItems);
 
-// Расчет параметров пагинации
+// Пагинация
 $totalPages = max(1, (int)ceil($totalFiltered / $perPage));
 if ($page > $totalPages) $page = $totalPages;
 
 $offset = ($page - 1) * $perPage;
 $pageItems = array_slice($filteredItems, $offset, $perPage);
-
-// Вычисление сводной статистики
-$stats = [
-    'total' => $totalFiltered,
-    'new' => 0,
-    'confirmed' => 0,
-    'in_progress' => 0,
-    'completed' => 0,
-    'cancelled' => 0
-];
-foreach ($filteredItems as $it) {
-    $s = mb_strtolower($it['STATUS']);
-    if (strpos($s, 'нов') !== false) $stats['new']++;
-    elseif (strpos($s, 'подтвержд') !== false) $stats['confirmed']++;
-    elseif (strpos($s, 'работ') !== false || strpos($s, 'процесс') !== false) $stats['in_progress']++;
-    elseif (strpos($s, 'заверш') !== false || strpos($s, 'выполн') !== false) $stats['completed']++;
-    elseif (strpos($s, 'отмен') !== false) $stats['cancelled']++;
-    else $stats['new']++;
-}
 
 require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admin_after.php");
 ?>
@@ -145,11 +171,20 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
     text-align: center;
     box-shadow: 0 1px 3px rgba(0,0,0,0.04);
     transition: all 0.2s ease;
+    user-select: none;
 }
 
-.tb-stat-card:hover {
+.tb-stat-card.clickable {
+    cursor: pointer;
+}
+
+.tb-stat-card.clickable:hover {
     transform: translateY(-2px);
-    box-shadow: 0 4px 6px rgba(0,0,0,0.06);
+    box-shadow: 0 6px 12px rgba(0,0,0,0.08);
+}
+
+.tb-stat-card.active {
+    box-shadow: 0 0 0 2px #2563eb, 0 4px 8px rgba(37,99,235,0.15);
 }
 
 .tb-stat-value {
@@ -299,7 +334,6 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
     color: #0f172a;
 }
 
-/* Пагинация в стиле callcenter_orders.php */
 .tb-pagination-bar {
     display: flex;
     justify-content: space-between;
@@ -354,33 +388,39 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
 </style>
 
 <div class="tb-container">
-    <!-- Сводная статистика -->
     <div class="tb-stats-grid">
         <div class="tb-stat-card tb-stat-blue">
-            <div class="tb-stat-value"><?=$stats['total']?></div>
+            <div class="tb-stat-value"><?=number_format($periodStats['total'], 0, '', ' ')?></div>
             <div class="tb-stat-label">Всего записей</div>
         </div>
-        <div class="tb-stat-card tb-stat-yellow">
-            <div class="tb-stat-value"><?=$stats['new']?></div>
-            <div class="tb-stat-label">Новые</div>
+
+        <?php $isTodayActive = ($dateFrom === $todayStr && $dateTo === $todayStr); ?>
+        <div class="tb-stat-card tb-stat-yellow clickable <?=$isTodayActive ? 'active' : ''?>" onclick="filterByPeriod('<?=$todayStr?>', '<?=$todayStr?>')">
+            <div class="tb-stat-value"><?=$periodStats['today']?></div>
+            <div class="tb-stat-label">Сегодня</div>
         </div>
-        <div class="tb-stat-card tb-stat-green">
-            <div class="tb-stat-value"><?=$stats['confirmed']?></div>
-            <div class="tb-stat-label">Подтверждённые</div>
+
+        <?php $isTomorrowActive = ($dateFrom === $tomorrowStr && $dateTo === $tomorrowStr); ?>
+        <div class="tb-stat-card tb-stat-green clickable <?=$isTomorrowActive ? 'active' : ''?>" onclick="filterByPeriod('<?=$tomorrowStr?>', '<?=$tomorrowStr?>')">
+            <div class="tb-stat-value"><?=$periodStats['tomorrow']?></div>
+            <div class="tb-stat-label">Завтра</div>
         </div>
-        <div class="tb-stat-card tb-stat-indigo">
-            <div class="tb-stat-value"><?=$stats['in_progress']?></div>
-            <div class="tb-stat-label">В работе</div>
+
+        <?php $isThisWeekActive = ($dateFrom === $thisWeekStartStr && $dateTo === $thisWeekEndStr); ?>
+        <div class="tb-stat-card tb-stat-indigo clickable <?=$isThisWeekActive ? 'active' : ''?>" onclick="filterByPeriod('<?=$thisWeekStartStr?>', '<?=$thisWeekEndStr?>')">
+            <div class="tb-stat-value"><?=$periodStats['this_week']?></div>
+            <div class="tb-stat-label">На этой неделе</div>
         </div>
-        <div class="tb-stat-card tb-stat-purple">
-            <div class="tb-stat-value"><?=$stats['completed']?></div>
-            <div class="tb-stat-label">Завершено</div>
+
+        <?php $isNextWeekActive = ($dateFrom === $nextWeekStartStr && $dateTo === $nextWeekEndStr); ?>
+        <div class="tb-stat-card tb-stat-purple clickable <?=$isNextWeekActive ? 'active' : ''?>" onclick="filterByPeriod('<?=$nextWeekStartStr?>', '<?=$nextWeekEndStr?>')">
+            <div class="tb-stat-value"><?=$periodStats['next_week']?></div>
+            <div class="tb-stat-label">На следующей неделе</div>
         </div>
     </div>
 
-    <!-- Фильтр-панель -->
     <div class="tb-filter-panel">
-        <form method="get" action="" class="tb-filter-row">
+        <form method="get" action="" id="tb-filter-form" class="tb-filter-row">
             <div class="tb-filter-group">
                 <label>Поиск (ФИО / Тел / Госномер):</label>
                 <input type="text" name="SEARCH" value="<?=htmlspecialcharsbx($searchQuery)?>" placeholder="Поиск по клиенту..." class="tb-filter-input" style="width: 220px;">
@@ -398,12 +438,12 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
 
             <div class="tb-filter-group">
                 <label>Период с:</label>
-                <input type="date" name="DATE_FROM" value="<?=htmlspecialcharsbx($dateFrom)?>" class="tb-filter-input">
+                <input type="date" name="DATE_FROM" id="field-date-from" value="<?=htmlspecialcharsbx($dateFrom)?>" class="tb-filter-input">
             </div>
 
             <div class="tb-filter-group">
                 <label>по:</label>
-                <input type="date" name="DATE_TO" value="<?=htmlspecialcharsbx($dateTo)?>" class="tb-filter-input">
+                <input type="date" name="DATE_TO" id="field-date-to" value="<?=htmlspecialcharsbx($dateTo)?>" class="tb-filter-input">
             </div>
 
             <div class="tb-filter-group">
@@ -423,7 +463,6 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
         </form>
     </div>
 
-    <!-- Таблица записей -->
     <div class="tb-table-wrapper">
         <table class="tb-table">
             <thead>
@@ -484,13 +523,11 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
             </tbody>
         </table>
 
-        <!-- Блок пагинации -->
         <?php if ($totalFiltered > 0): ?>
             <?php 
                 $startItem = $offset + 1;
                 $endItem = min($offset + $perPage, $totalFiltered);
                 
-                // Формирование URL параметров пагинации
                 $queryParams = $_GET;
                 unset($queryParams['page']);
                 $buildUrl = function($p) use ($queryParams) {
@@ -520,7 +557,6 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
     </div>
 </div>
 
-<!-- Модальное окно просмотра деталей записи -->
 <div id="detail-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(15,23,42,0.5); z-index:9999; justify-content:center; align-items:center;">
     <div style="background:#fff; border-radius:12px; max-width:600px; width:90%; padding:24px; box-shadow:0 20px 25px -5px rgba(0,0,0,0.1);">
         <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #e2e8f0; padding-bottom:12px; margin-bottom:16px;">
@@ -535,6 +571,12 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
 </div>
 
 <script>
+function filterByPeriod(from, to) {
+    document.getElementById('field-date-from').value = from;
+    document.getElementById('field-date-to').value = to;
+    document.getElementById('tb-filter-form').submit();
+}
+
 function showDetails(item) {
     document.getElementById('modal-title').innerText = 'Запись на шиномонтаж #' + item.ID;
     var html = '<div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">' +

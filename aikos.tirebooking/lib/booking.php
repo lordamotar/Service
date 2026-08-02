@@ -14,9 +14,6 @@ class BookingManager
         return $id > 0 ? $id : 80;
     }
 
-    /**
-     * Проверка, является ли строка сервисным типом авто/услуги (не гос. номер)
-     */
     protected static function isServiceTypeStr($val)
     {
         $v = mb_strtolower(trim($val));
@@ -25,8 +22,22 @@ class BookingManager
     }
 
     /**
-     * Извлечение данных элемента из свойств инфоблока
+     * Получить точное общее количество записей в базе (без лимита выборки)
      */
+    public static function getCount(array $filter = [])
+    {
+        if (!Loader::includeModule('iblock')) return 0;
+        $iblockId = self::getBookingIblockId();
+        $arFilter = array_merge(['IBLOCK_ID' => $iblockId, 'ACTIVE' => 'Y'], $filter);
+        
+        $count = (int)\CIBlockElement::GetList([], $arFilter, array());
+        if ($count === 0 && $iblockId == 80 && empty($filter)) {
+            $arFilter['IBLOCK_ID'] = 94;
+            $count = (int)\CIBlockElement::GetList([], $arFilter, array());
+        }
+        return $count;
+    }
+
     protected static function parseElementData(\_CIBElement $ob)
     {
         $fields = $ob->GetFields();
@@ -54,7 +65,6 @@ class BookingManager
             $cUpper = mb_strtoupper($code);
             $nameUpper = mb_strtoupper($prop['NAME']);
 
-            // Игнорируем попадание сервисных служебных терминов в гос. номер
             if (self::isServiceTypeStr($valStr)) {
                 if (!$serviceName && (strpos($cUpper, 'TYPE') !== false || strpos($cUpper, 'SERVICE') !== false || strpos($nameUpper, 'ТИП') !== false || strpos($nameUpper, 'УСЛУГ') !== false)) {
                     $serviceName = $valStr;
@@ -62,46 +72,37 @@ class BookingManager
                 continue;
             }
 
-            // Поиск телефона
             if (!$clientPhone && (strpos($cUpper, 'PHONE') !== false || strpos($cUpper, 'TEL') !== false || strpos($nameUpper, 'ТЕЛЕФОН') !== false || strpos($nameUpper, 'ТЕЛ') !== false)) {
                 $clientPhone = $valStr;
             }
-            // Поиск имени клиента / ФИО
             elseif (!$clientName && (strpos($cUpper, 'FIO') !== false || strpos($cUpper, 'CLIENT') !== false || strpos($cUpper, 'USER') !== false || strpos($nameUpper, 'ФИО') !== false || strpos($nameUpper, 'КЛИЕНТ') !== false || strpos($nameUpper, 'ИМЯ') !== false)) {
                 $clientName = $valStr;
             }
-            // Поиск гос. номера авто (проверяем, чтобы это был не просто тип авто)
             elseif (!$carNumber && (strpos($cUpper, 'CAR_NUMBER') !== false || strpos($cUpper, 'GOS_NUMBER') !== false || strpos($cUpper, 'AUTO_NUM') !== false || strpos($cUpper, 'GOS_NUM') !== false || strpos($cUpper, 'CAR') !== false || strpos($cUpper, 'AUTO') !== false || strpos($nameUpper, 'ГОС') !== false || strpos($nameUpper, 'НОМЕР') !== false)) {
                 if (!self::isServiceTypeStr($valStr)) {
                     $carNumber = $valStr;
                 }
             }
-            // Поиск Центра / Точки / Магазина
             elseif (!$centerId && (strpos($cUpper, 'CENTER') !== false || strpos($cUpper, 'SHOP') !== false || strpos($cUpper, 'STORE') !== false || strpos($cUpper, 'POINT') !== false || strpos($nameUpper, 'ЦЕНТР') !== false || strpos($nameUpper, 'ТОЧКА') !== false || strpos($nameUpper, 'ФИЛИАЛ') !== false)) {
                 $centerId = $valStr;
                 if (!empty($prop['VALUE_ENUM'])) {
                     $centerName = $prop['VALUE_ENUM'];
                 }
             }
-            // Поиск даты и времени
             elseif (!$dateTime && (strpos($cUpper, 'DATE') !== false || strpos($cUpper, 'TIME') !== false || strpos($nameUpper, 'ДАТА') !== false || strpos($nameUpper, 'ВРЕМЯ') !== false)) {
                 $dateTime = $valStr;
             }
-            // Поиск статуса
             elseif (strpos($cUpper, 'STATUS') !== false || strpos($cUpper, 'STATE') !== false || strpos($nameUpper, 'СТАТУС') !== false) {
                 $status = $prop['VALUE_ENUM'] ?? $valStr;
             }
-            // Поиск услуги
             elseif (!$serviceName && (strpos($cUpper, 'SERVICE') !== false || strpos($nameUpper, 'УСЛУГ') !== false)) {
                 $serviceName = $prop['VALUE_ENUM'] ?? $valStr;
             }
-            // Поиск поста
             elseif (!$postName && (strpos($cUpper, 'POST') !== false || strpos($nameUpper, 'ПОСТ') !== false)) {
                 $postName = $prop['VALUE_ENUM'] ?? $valStr;
             }
         }
 
-        // Резервные значения из имени и даты элемента
         if (!$clientName) {
             $clientName = $fields['NAME'];
         }
@@ -126,14 +127,9 @@ class BookingManager
         ];
     }
 
-    /**
-     * Получить весь выбор записей из инфоблока 80 или 94
-     */
-    public static function getList(array $filter = [], array $order = ['ID' => 'DESC'], $limit = 2000)
+    public static function getList(array $filter = [], array $order = ['ID' => 'DESC'], $limit = 5000)
     {
-        if (!Loader::includeModule('iblock')) {
-            return [];
-        }
+        if (!Loader::includeModule('iblock')) return [];
 
         $iblockId = self::getBookingIblockId();
         $arFilter = ['IBLOCK_ID' => $iblockId, 'ACTIVE' => 'Y'];
@@ -160,38 +156,5 @@ class BookingManager
         }
 
         return $items;
-    }
-
-    public static function getStats()
-    {
-        $items = self::getList([], ['ID' => 'DESC'], 1000);
-
-        $stats = [
-            'total' => count($items),
-            'new' => 0,
-            'confirmed' => 0,
-            'in_progress' => 0,
-            'completed' => 0,
-            'cancelled' => 0
-        ];
-
-        foreach ($items as $item) {
-            $status = mb_strtolower(trim($item['STATUS']));
-            if (strpos($status, 'нов') !== false) {
-                $stats['new']++;
-            } elseif (strpos($status, 'подтвержд') !== false) {
-                $stats['confirmed']++;
-            } elseif (strpos($status, 'работ') !== false || strpos($status, 'процесс') !== false) {
-                $stats['in_progress']++;
-            } elseif (strpos($status, 'заверш') !== false || strpos($status, 'выполн') !== false) {
-                $stats['completed']++;
-            } elseif (strpos($status, 'отмен') !== false) {
-                $stats['cancelled']++;
-            } else {
-                $stats['new']++;
-            }
-        }
-
-        return $stats;
     }
 }
