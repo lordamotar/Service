@@ -21,7 +21,7 @@ class aikos_tirebooking extends CModule
         $this->MODULE_VERSION = $arModuleVersion["VERSION"];
         $this->MODULE_VERSION_DATE = $arModuleVersion["VERSION_DATE"];
         $this->MODULE_NAME = "Записи шиномонтажа и отслеживание";
-        $this->MODULE_DESCRIPTION = "Модуль управления записями на шиномонтаж и интерактивный гаджет отслеживания для рабочего стола Битрикс24.";
+        $this->MODULE_DESCRIPTION = "Модуль управления записями на шиномонтаж и интерактивный гаджет для рабочего стола административной панели 1С-Битрикс: Управление сайтом.";
         $this->PARTNER_NAME = "AIKOS";
         $this->PARTNER_URI = "https://aikos.kz";
     }

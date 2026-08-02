@@ -8,3 +8,9 @@ wheels/
 
 # Virtual environments
 .venv
+.agents
+.chrome-debug
+.chrome-debug-profile
+.gstack
+other/
+*.zip
