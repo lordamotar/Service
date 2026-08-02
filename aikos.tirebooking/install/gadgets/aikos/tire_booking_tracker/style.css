@@ -1,0 +1,133 @@
+.bx-gadget-tire-booking {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #1e293b;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.bx-gadget-tb-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #e2e8f0;
+}
+
+.bx-gadget-tb-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: #0f172a;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.bx-gadget-tb-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin-bottom: 14px;
+}
+
+.bx-gadget-tb-stat-card {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 8px 10px;
+    text-align: center;
+}
+
+.bx-gadget-tb-stat-num {
+    font-size: 18px;
+    font-weight: 700;
+    line-height: 1.2;
+}
+
+.bx-gadget-tb-stat-num.total { color: #0284c7; }
+.bx-gadget-tb-stat-num.new { color: #d97706; }
+.bx-gadget-tb-stat-num.progress { color: #4f46e5; }
+.bx-gadget-tb-stat-num.done { color: #16a34a; }
+
+.bx-gadget-tb-stat-lbl {
+    font-size: 11px;
+    color: #64748b;
+}
+
+.bx-gadget-tb-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.bx-gadget-tb-item {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-left: 4px solid #3b82f6;
+    border-radius: 6px;
+    padding: 10px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    transition: all 0.2s ease;
+}
+
+.bx-gadget-tb-item:hover {
+    border-color: #cbd5e1;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+
+.bx-gadget-tb-item.status-new { border-left-color: #f59e0b; }
+.bx-gadget-tb-item.status-confirmed { border-left-color: #10b981; }
+.bx-gadget-tb-item.status-progress { border-left-color: #6366f1; }
+.bx-gadget-tb-item.status-completed { border-left-color: #8b5cf6; }
+
+.bx-gadget-tb-client {
+    font-weight: 600;
+    color: #1e293b;
+}
+
+.bx-gadget-tb-info {
+    font-size: 11px;
+    color: #64748b;
+    display: flex;
+    gap: 10px;
+    margin-top: 2px;
+}
+
+.bx-gadget-tb-car {
+    background: #f1f5f9;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-family: monospace;
+    color: #334155;
+}
+
+.bx-gadget-tb-badge {
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 12px;
+    background: #f1f5f9;
+    color: #475569;
+}
+
+.bx-gadget-tb-footer {
+    margin-top: 12px;
+    text-align: right;
+}
+
+.bx-gadget-tb-btn {
+    display: inline-block;
+    padding: 5px 12px;
+    background: #2563eb;
+    color: #ffffff !important;
+    border-radius: 4px;
+    text-decoration: none;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.bx-gadget-tb-btn:hover {
+    background: #1d4ed8;
+}
