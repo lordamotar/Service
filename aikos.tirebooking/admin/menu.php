@@ -17,6 +17,12 @@ if ($APPLICATION->GetGroupRight("aikos.tirebooking") > "D") {
                 "url" => "aikos_tirebooking_list.php?lang=" . LANGUAGE_ID,
                 "more_url" => array("aikos_tirebooking_list.php"),
                 "title" => "Список и мониторинг записей шиномонтажа",
+            ),
+            array(
+                "text" => "Анализ и Дашборды",
+                "url" => "aikos_tirebooking_analytics.php?lang=" . LANGUAGE_ID,
+                "more_url" => array("aikos_tirebooking_analytics.php"),
+                "title" => "Аналитика, дашборды и наглядные графики",
             )
         )
     );

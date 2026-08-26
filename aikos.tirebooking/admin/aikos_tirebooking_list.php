@@ -388,6 +388,11 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
 </style>
 
 <div class="tb-container">
+    <div class="tb-nav-tabs" style="display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 2px solid #e2e8f0; padding-bottom: 0;">
+        <a href="aikos_tirebooking_list.php?lang=<?=LANGUAGE_ID?>" class="tb-nav-tab active" style="padding: 10px 18px; font-weight: 600; text-decoration: none; color: #2563eb; border-bottom: 3px solid #2563eb; margin-bottom: -2px;">📋 Отслеживание записей</a>
+        <a href="aikos_tirebooking_analytics.php?lang=<?=LANGUAGE_ID?>" class="tb-nav-tab" style="padding: 10px 18px; font-weight: 600; text-decoration: none; color: #64748b; border-bottom: 3px solid transparent; margin-bottom: -2px;">📊 Анализ и Дашборды</a>
+    </div>
+
     <div class="tb-stats-grid">
         <div class="tb-stat-card tb-stat-blue">
             <div class="tb-stat-value"><?=number_format($periodStats['total'], 0, '', ' ')?></div>

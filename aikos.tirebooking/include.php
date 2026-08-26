@@ -8,5 +8,6 @@ Loader::registerAutoLoadClasses(
         "Aikos\\TireBooking\\CenterTable" => "lib/center.php",
         "Aikos\\TireBooking\\BookingManager" => "lib/booking.php",
         "Aikos\\TireBooking\\CenterManager" => "lib/center.php",
+        "Aikos\\TireBooking\\AnalyticsManager" => "lib/analytics.php",
     )
 );
