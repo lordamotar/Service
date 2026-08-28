@@ -19,18 +19,58 @@ class AnalyticsManager
     }
 
     /**
-     * Определение типа кузова (с категорией 'Не заполнено')
+     * Определение типа кузова (строго в соответствии со структурой шиномонтажа: Легковой, Кроссовер, Внедорожник, Минивэн, Пикап и др.)
      */
     public static function detectBodyType($item)
     {
-        $str = mb_strtolower($item['NAME'] . ' ' . $item['SERVICE_NAME'] . ' ' . $item['COMMENT'] . ' ' . $item['CAR_NUMBER']);
-        if (strpos($str, 'седан') !== false || strpos($str, 'sedan') !== false) return 'Седан';
-        if (strpos($str, 'кроссовер') !== false || strpos($str, 'crossover') !== false || strpos($str, 'паркетник') !== false) return 'Кроссовер';
-        if (strpos($str, 'внедорожник') !== false || strpos($str, 'suv') !== false || strpos($str, 'джип') !== false) return 'Внедорожник';
-        if (strpos($str, 'хэтчбек') !== false || strpos($str, 'hatchback') !== false) return 'Хэтчбек';
-        if (strpos($str, 'минивэн') !== false || strpos($str, 'minivan') !== false) return 'Минивэн';
-        if (strpos($str, 'пикап') !== false || strpos($str, 'pickup') !== false) return 'Пикап';
-        if (strpos($str, 'купе') !== false || strpos($str, 'coupe') !== false) return 'Купе';
+        $directVal = trim((string)($item['BODY_TYPE'] ?? $item['CAR_BODY'] ?? ''));
+        if ($directVal !== '') {
+            $dLower = mb_strtolower($directVal);
+            if (preg_match('/(кросс|cross|kross|паркет)/iu', $dLower)) {
+                return 'Кроссовер';
+            }
+            if (preg_match('/(внедор|suv|джип|jeep|offroad|vnedor|4x4|4х4)/iu', $dLower)) {
+                return 'Внедорожник';
+            }
+            if (preg_match('/(легков|седан|sedan|хэтч|hatch|универсал|купе|coupe|sed|tyre|tire|wheel|passenger)/iu', $dLower)) {
+                return 'Легковой';
+            }
+            if (preg_match('/(минив|minivan|микроавтобус|бус|van|коммерч|bus)/iu', $dLower)) {
+                return 'Минивэн';
+            }
+            if (preg_match('/(пикап|pickup|pick)/iu', $dLower)) {
+                return 'Пикап';
+            }
+            if (preg_match('/(грузов|truck)/iu', $dLower)) {
+                return 'Грузовой';
+            }
+            return mb_convert_case($directVal, MB_CASE_TITLE, 'UTF-8');
+        }
+
+        $fieldsToSearch = [
+            $item['NAME'] ?? '',
+            $item['SERVICE_NAME'] ?? '',
+            $item['COMMENT'] ?? '',
+            $item['CAR_NUMBER'] ?? ''
+        ];
+        
+        $str = mb_strtolower(implode(' ', $fieldsToSearch));
+
+        if (preg_match('/(кросс|cross|kross|паркет)/iu', $str)) {
+            return 'Кроссовер';
+        }
+        if (preg_match('/(внедор|suv|джип|jeep|offroad|vnedor|4x4|4х4)/iu', $str)) {
+            return 'Внедорожник';
+        }
+        if (preg_match('/(легков|седан|sedan|хэтч|hatch|универсал|купе|coupe|sed|tyre|tire|wheel)/iu', $str)) {
+            return 'Легковой';
+        }
+        if (preg_match('/(минив|minivan|микроавтобус|бус|van)/iu', $str)) {
+            return 'Минивэн';
+        }
+        if (preg_match('/(пикап|pickup|pick)/iu', $str)) {
+            return 'Пикап';
+        }
 
         return 'Не заполнено';
     }
@@ -40,13 +80,20 @@ class AnalyticsManager
      */
     public static function detectTireDiameter($item)
     {
-        $str = mb_strtoupper($item['NAME'] . ' ' . $item['SERVICE_NAME'] . ' ' . $item['COMMENT']);
-        if (preg_match('/R(1[3-9]|2[0-4])/i', $str, $m)) {
+        $str = mb_strtoupper(trim(($item['TIRE_DIAMETER'] ?? '') . ' ' . $item['NAME'] . ' ' . $item['SERVICE_NAME'] . ' ' . $item['COMMENT']));
+        if (preg_match('/R?(1[3-9]|2[0-4])/i', $str, $m)) {
             $r = (int)$m[1];
             if ($r <= 15) return 'R15';
             if ($r == 16) return 'R16';
             if ($r == 17) return 'R17';
-            return 'R18+';
+            if ($r == 18) return 'R18';
+            return 'R19+';
+        }
+
+        if (!empty($item['TIRE_DIAMETER'])) {
+            $td = trim((string)$item['TIRE_DIAMETER']);
+            if (preg_match('/R/i', $td)) return mb_strtoupper($td);
+            return 'R' . $td;
         }
 
         return 'Не заполнено';
@@ -59,8 +106,8 @@ class AnalyticsManager
     {
         // Проверка кеша
         $cache = Cache::createInstance();
-        $cacheId = 'an_data_v2_' . md5(serialize($filterParams));
-        if ($cache->initCache(180, $cacheId, '/aikos_tirebooking/analytics/')) {
+        $cacheId = 'an_data_v21_' . md5(serialize($filterParams));
+        if ($cache->initCache(10, $cacheId, '/aikos_tirebooking/analytics/')) {
             return $cache->getVars();
         }
 
@@ -117,27 +164,42 @@ class AnalyticsManager
             if ($clientType === 'new' && $isRegularClient) continue;
             if ($clientType === 'regular' && !$isRegularClient) continue;
 
-            // Фильтр по дате
-            $itemDateStr = $item['DATE_TIME'] ?: $item['DATE_CREATE'];
-            if ($itemDateStr) {
-                $ts = strtotime($itemDateStr);
-                if ($ts > 0) {
-                    $itemYmd = date('Y-m-d', $ts);
-                    if ($dateFrom !== '' && $itemYmd < $dateFrom) continue;
-                    if ($dateTo !== '' && $itemYmd > $dateTo) continue;
-                }
+            // Фильтр по дате (по дате создания DATE_CREATE или по дате приёма TIME_FIRST_INTERVAL)
+            if ($dateFrom !== '' || $dateTo !== '') {
+                $createYmd = !empty($item['DATE_CREATE']) ? date('Y-m-d', strtotime($item['DATE_CREATE'])) : '';
+                $visitYmd = !empty($item['DATE_TIME']) ? date('Y-m-d', strtotime($item['DATE_TIME'])) : '';
+
+                $matchCreate = true;
+                if ($dateFrom !== '' && ($createYmd === '' || $createYmd < $dateFrom)) $matchCreate = false;
+                if ($dateTo !== '' && ($createYmd === '' || $createYmd > $dateTo)) $matchCreate = false;
+
+                $matchVisit = true;
+                if ($dateFrom !== '' && ($visitYmd === '' || $visitYmd < $dateFrom)) $matchVisit = false;
+                if ($dateTo !== '' && ($visitYmd === '' || $visitYmd > $dateTo)) $matchVisit = false;
+
+                if (!$matchCreate && !$matchVisit) continue;
             }
 
             // Определение диаметра шин
             $detectedDiameter = self::detectTireDiameter($item);
             if ($tireDiameterFilter !== 'all') {
-                if ($tireDiameterFilter === 'R19' && $detectedDiameter !== 'R18+') continue;
+                if ($tireDiameterFilter === 'R19' && $detectedDiameter !== 'R18+' && $detectedDiameter !== 'R19+') continue;
                 if ($tireDiameterFilter === 'NONE' && $detectedDiameter !== 'Не заполнено') continue;
                 if ($tireDiameterFilter !== 'R19' && $tireDiameterFilter !== 'NONE' && $detectedDiameter !== $tireDiameterFilter) continue;
             }
 
-            // Хранение
-            $isStorage = ((int)$item['ID'] % 2 === 0 || strpos(mb_strtolower($item['SERVICE_NAME']), 'хран') !== false);
+            // Хранение из свойства и по контексту
+            $isStorage = false;
+            if (!empty($item['IS_STORAGE'])) {
+                $stVal = mb_strtolower(trim((string)$item['IS_STORAGE']));
+                if ($stVal !== 'нет' && $stVal !== 'n' && $stVal !== '0' && $stVal !== 'false') {
+                    $isStorage = true;
+                }
+            }
+            if (!$isStorage && strpos(mb_strtolower(($item['SERVICE_NAME'] ?? '') . ' ' . ($item['COMMENT'] ?? '')), 'хран') !== false) {
+                $isStorage = true;
+            }
+
             if ($storageFilter === 'Y' && !$isStorage) continue;
             if ($storageFilter === 'N' && $isStorage) continue;
 
@@ -179,12 +241,12 @@ class AnalyticsManager
         }
 
         $dateCounts = [];
-        $bodyTypes = ['Седан', 'Кроссовер', 'Внедорожник', 'Хэтчбек', 'Минивэн', 'Пикап', 'Купе', 'Не заполнено'];
+        $bodyTypes = ['Легковой', 'Кроссовер', 'Внедорожник', 'Минивэн', 'Пикап', 'Купе', 'Не заполнено'];
         $bodyTypeStats = [];
         $bodyTypeDiameterStacked = [];
         foreach ($bodyTypes as $bt) {
             $bodyTypeStats[$bt] = 0;
-            $bodyTypeDiameterStacked[$bt] = ['R15' => 0, 'R16' => 0, 'R17' => 0, 'R18+' => 0, 'Не заполнено' => 0];
+            $bodyTypeDiameterStacked[$bt] = ['R15' => 0, 'R16' => 0, 'R17' => 0, 'R18' => 0, 'R18+' => 0, 'R19+' => 0, 'Не заполнено' => 0];
         }
 
         $tireDiameterCounts = ['R16' => 0, 'R17' => 0, 'R15' => 0, 'R18' => 0, 'R19+' => 0, 'Не заполнено' => 0];
@@ -219,8 +281,11 @@ class AnalyticsManager
             }
             $dateCounts[$ymd]++;
 
-            $createdTs = strtotime($item['DATE_CREATE']) ?: $ts;
-            $diffDays = max(0, (int)floor(($ts - $createdTs) / 86400));
+            // Расчет глубины бронирования
+            $visitDateStr = !empty($item['TIME_FIRST_INTERVAL']) ? $item['TIME_FIRST_INTERVAL'] : $item['DATE_TIME'];
+            $targetTs = strtotime($visitDateStr) ?: $ts;
+            $createdTs = strtotime($item['DATE_CREATE']) ?: $targetTs;
+            $diffDays = max(0, (int)floor(($targetTs - $createdTs) / 86400));
 
             if ($diffDays == 0) $bookingDepthExtended['День в день']++;
             elseif ($diffDays == 1) $bookingDepthExtended['1 день']++;
@@ -230,16 +295,25 @@ class AnalyticsManager
             elseif ($diffDays >= 15 && $diffDays <= 30) $bookingDepthExtended['15-30 дней']++;
             else $bookingDepthExtended['30+ дней']++;
 
-            $bt = $item['_body_type'];
-            $td = $item['_tire_diameter'];
+            $bt = $item['_body_type'] ?: 'Не заполнено';
+            $td = $item['_tire_diameter'] ?: 'Не заполнено';
 
-            if (isset($bodyTypeStats[$bt])) {
-                $bodyTypeStats[$bt]++;
+            if (!isset($bodyTypeStats[$bt])) {
+                $bodyTypeStats[$bt] = 0;
+                $bodyTypeDiameterStacked[$bt] = ['R15' => 0, 'R16' => 0, 'R17' => 0, 'R18' => 0, 'R18+' => 0, 'R19+' => 0, 'Не заполнено' => 0];
+            }
+
+            $bodyTypeStats[$bt]++;
+            if (isset($bodyTypeDiameterStacked[$bt][$td])) {
                 $bodyTypeDiameterStacked[$bt][$td]++;
+            } else {
+                $bodyTypeDiameterStacked[$bt]['Не заполнено']++;
             }
 
             if (isset($tireDiameterCounts[$td])) {
                 $tireDiameterCounts[$td]++;
+            } else {
+                $tireDiameterCounts['Не заполнено']++;
             }
         }
 
@@ -259,6 +333,7 @@ class AnalyticsManager
         ksort($dateCounts);
         $trendDays = [];
         $trendValues = [];
+        $trendMode = 'days';
 
         if (empty($dateCounts)) {
             for ($i = 13; $i >= 0; $i--) {
@@ -266,10 +341,49 @@ class AnalyticsManager
                 $trendValues[] = 0;
             }
         } else {
-            $sliceDates = array_slice($dateCounts, -14, 14, true);
-            foreach ($sliceDates as $ymd => $cnt) {
-                $trendDays[] = date('d.m', strtotime($ymd));
-                $trendValues[] = $cnt;
+            $ymdKeys = array_keys($dateCounts);
+            $minYmd = reset($ymdKeys);
+            $maxYmd = end($ymdKeys);
+
+            $startTs = ($dateFrom !== '') ? strtotime($dateFrom) : strtotime($minYmd);
+            $endTs = ($dateTo !== '') ? strtotime($dateTo) : strtotime($maxYmd);
+
+            if ($startTs <= 0 || $endTs <= 0 || $startTs > $endTs) {
+                $startTs = strtotime($minYmd);
+                $endTs = strtotime($maxYmd);
+            }
+
+            $daysDiff = (int)ceil(($endTs - $startTs) / 86400);
+
+            if ($daysDiff > 31) {
+                // Разбивка по неделям
+                $trendMode = 'weeks';
+                $currStart = $startTs;
+                while ($currStart <= $endTs) {
+                    $currEnd = min($endTs, $currStart + 6 * 86400);
+                    $label = date('d.m', $currStart) . '-' . date('d.m', $currEnd);
+                    $sumWeek = 0;
+
+                    for ($t = $currStart; $t <= $currEnd; $t += 86400) {
+                        $y = date('Y-m-d', $t);
+                        if (isset($dateCounts[$y])) {
+                            $sumWeek += $dateCounts[$y];
+                        }
+                    }
+
+                    $trendDays[] = $label;
+                    $trendValues[] = $sumWeek;
+
+                    $currStart = $currEnd + 86400;
+                }
+            } else {
+                // Разбивка по дням
+                $trendMode = 'days';
+                for ($t = $startTs; $t <= $endTs; $t += 86400) {
+                    $y = date('Y-m-d', $t);
+                    $trendDays[] = date('d.m', $t);
+                    $trendValues[] = $dateCounts[$y] ?? 0;
+                }
             }
         }
 
@@ -293,9 +407,28 @@ class AnalyticsManager
 
         $totalBodyCount = array_sum($bodyTypeStats);
         $bodyTypesFormatted = [];
-        foreach ($bodyTypeStats as $btName => $btCnt) {
-            $pct = $totalBodyCount > 0 ? round(($btCnt / $totalBodyCount) * 100) : 0;
-            $bodyTypesFormatted[$btName] = $pct;
+        
+        // Сортировка типов кузова: сначала заполненные по убыванию количества, в конце "Не заполнено"
+        $bodyTypeStatsSorted = $bodyTypeStats;
+        $unfilledCount = $bodyTypeStatsSorted['Не заполнено'] ?? 0;
+        unset($bodyTypeStatsSorted['Не заполнено']);
+        arsort($bodyTypeStatsSorted);
+        if ($unfilledCount > 0 || empty($bodyTypeStatsSorted)) {
+            $bodyTypeStatsSorted['Не заполнено'] = $unfilledCount;
+        }
+
+        $filteredStacked = [];
+        foreach ($bodyTypeStatsSorted as $btName => $btCnt) {
+            // Исключаем пустые категории (0 шт.), чтобы не дублировать и не засорять дашборд
+            if ($btCnt <= 0 && $btName !== 'Не заполнено') {
+                continue;
+            }
+            $pct = $totalBodyCount > 0 ? round(($btCnt / $totalBodyCount) * 100, 1) : 0;
+            $bodyTypesFormatted[$btName] = [
+                'percent' => $pct,
+                'count' => $btCnt
+            ];
+            $filteredStacked[$btName] = $bodyTypeDiameterStacked[$btName] ?? ['R15' => 0, 'R16' => 0, 'R17' => 0, 'R18' => 0, 'R18+' => 0, 'R19+' => 0, 'Не заполнено' => 0];
         }
 
         $result = [
@@ -309,18 +442,20 @@ class AnalyticsManager
                 'trend' => [
                     'days' => $trendDays,
                     'values' => $trendValues,
-                    'avg' => $avgValue
+                    'avg' => $avgValue,
+                    'mode' => $trendMode
                 ],
                 'booking_depth' => $bookingDepthExtended,
             ],
             'block2' => [
-                'total_clients' => count($uniqueClients) ?: $countFiltered,
+                'total_records' => $countFiltered,
+                'total_clients' => count($uniqueClients),
                 'storage_contracts' => $storageCount,
                 'storage_percent' => $storagePercent,
                 'top_tire_size' => $topTireSize,
                 'tire_diameters' => $tireDiametersFormatted,
                 'body_types' => $bodyTypesFormatted,
-                'stacked_body_types' => $bodyTypeDiameterStacked,
+                'stacked_body_types' => $filteredStacked,
             ]
         ];
 

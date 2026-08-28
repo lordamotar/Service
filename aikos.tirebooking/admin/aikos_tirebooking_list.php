@@ -4,26 +4,58 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
 use Bitrix\Main\Loader;
 use Aikos\TireBooking\BookingManager;
 use Aikos\TireBooking\CenterManager;
+use Aikos\TireBooking\AnalyticsManager;
 
 $MODULE_ID = "aikos.tirebooking";
 Loader::includeModule($MODULE_ID);
 Loader::includeModule("iblock");
 
+$bookingIb = (int)\Bitrix\Main\Config\Option::get($MODULE_ID, "IBLOCK_BOOKING_ID", 80);
+$hasIblockAccess = \CIBlock::GetPermission($bookingIb) > "D";
 $POST_RIGHT = $APPLICATION->GetGroupRight($MODULE_ID);
-if ($POST_RIGHT <= "D") {
+if ($POST_RIGHT <= "D" && !$hasIblockAccess) {
     $APPLICATION->AuthForm(GetMessage("ACCESS_DENIED"));
 }
 
 $APPLICATION->SetTitle("Отслеживание и мониторинг записей шиномонтажа");
 
-// Параметры фильтрации и пагинации
-$dateFrom = trim($_REQUEST['DATE_FROM'] ?? '');
-$dateTo = trim($_REQUEST['DATE_TO'] ?? '');
-$centerId = isset($_REQUEST['CENTER_ID']) ? (int)$_REQUEST['CENTER_ID'] : 0;
-$searchQuery = trim($_REQUEST['SEARCH'] ?? '');
+// Персональные настройки фильтра текущего менеджера через CUserOptions
+$userListFilter = \CUserOptions::GetOption($MODULE_ID, 'list_filter', []);
+
+if (isset($_REQUEST['reset']) && $_REQUEST['reset'] === 'Y') {
+    \CUserOptions::DeleteOption($MODULE_ID, 'list_filter');
+    LocalRedirect("aikos_tirebooking_list.php?lang=" . LANGUAGE_ID);
+}
+
+if (isset($_REQUEST['SEARCH']) || isset($_REQUEST['CENTER_ID']) || isset($_REQUEST['DATE_FROM'])) {
+    $dateFrom = trim($_REQUEST['DATE_FROM'] ?? '');
+    $dateTo = trim($_REQUEST['DATE_TO'] ?? '');
+    $centerId = isset($_REQUEST['CENTER_ID']) ? (int)$_REQUEST['CENTER_ID'] : 0;
+    $searchQuery = trim($_REQUEST['SEARCH'] ?? '');
+    $perPage = isset($_REQUEST['per_page']) ? max(10, (int)$_REQUEST['per_page']) : 25;
+
+    \CUserOptions::SetOption($MODULE_ID, 'list_filter', [
+        'DATE_FROM' => $dateFrom,
+        'DATE_TO' => $dateTo,
+        'CENTER_ID' => $centerId,
+        'SEARCH' => $searchQuery,
+        'PER_PAGE' => $perPage,
+    ]);
+} elseif (!empty($userListFilter) && is_array($userListFilter)) {
+    $dateFrom = $userListFilter['DATE_FROM'] ?? '';
+    $dateTo = $userListFilter['DATE_TO'] ?? '';
+    $centerId = (int)($userListFilter['CENTER_ID'] ?? 0);
+    $searchQuery = $userListFilter['SEARCH'] ?? '';
+    $perPage = (int)($userListFilter['PER_PAGE'] ?? 25);
+} else {
+    $dateFrom = '';
+    $dateTo = '';
+    $centerId = 0;
+    $searchQuery = '';
+    $perPage = 25;
+}
 
 $page = isset($_REQUEST['page']) ? max(1, (int)$_REQUEST['page']) : 1;
-$perPage = isset($_REQUEST['per_page']) ? max(10, (int)$_REQUEST['per_page']) : 25;
 
 $centers = CenterManager::getCenters();
 $selectedCenterName = $centers[$centerId] ?? '';
@@ -120,25 +152,48 @@ foreach ($baseFilteredItems as $it) {
 
 // Фильтрация результирующего списка по выбору периода (DATE_FROM / DATE_TO)
 $filteredItems = array_filter($baseFilteredItems, function($item) use ($dateFrom, $dateTo) {
-    $itemDateStr = $item['DATE_TIME'] ?: $item['DATE_CREATE'];
-    if ($itemDateStr) {
-        $ts = strtotime($itemDateStr);
-        if ($ts > 0) {
-            $itemYmd = date('Y-m-d', $ts);
-            if ($dateFrom !== '' && $itemYmd < $dateFrom) {
-                return false;
-            }
-            if ($dateTo !== '' && $itemYmd > $dateTo) {
-                return false;
-            }
-        }
-    }
-    return true;
+    if ($dateFrom === '' && $dateTo === '') return true;
+
+    $createYmd = !empty($item['DATE_CREATE']) ? date('Y-m-d', strtotime($item['DATE_CREATE'])) : '';
+    $visitYmd = !empty($item['DATE_TIME']) ? date('Y-m-d', strtotime($item['DATE_TIME'])) : '';
+
+    $matchCreate = true;
+    if ($dateFrom !== '' && ($createYmd === '' || $createYmd < $dateFrom)) $matchCreate = false;
+    if ($dateTo !== '' && ($createYmd === '' || $createYmd > $dateTo)) $matchCreate = false;
+
+    $matchVisit = true;
+    if ($dateFrom !== '' && ($visitYmd === '' || $visitYmd < $dateFrom)) $matchVisit = false;
+    if ($dateTo !== '' && ($visitYmd === '' || $visitYmd > $dateTo)) $matchVisit = false;
+
+    return ($matchCreate || $matchVisit);
 });
 
 // Переиндексация массива
 $filteredItems = array_values($filteredItems);
 $totalFiltered = count($filteredItems);
+
+// Сортировка таблицы
+$sortBy = trim($_REQUEST['sort'] ?? 'ID');
+$sortOrder = mb_strtolower(trim($_REQUEST['order'] ?? 'desc')) === 'asc' ? 'asc' : 'desc';
+
+usort($filteredItems, function($a, $b) use ($sortBy, $sortOrder) {
+    $valA = $a[$sortBy] ?? '';
+    $valB = $b[$sortBy] ?? '';
+    
+    if ($sortBy === 'ID') {
+        $cmp = (int)$valA <=> (int)$valB;
+    } elseif (in_array($sortBy, ['DATE_CREATE', 'DATE_TIME', 'TIME_FIRST_INTERVAL'])) {
+        $tsA = strtotime((string)$valA) ?: 0;
+        $tsB = strtotime((string)$valB) ?: 0;
+        $cmp = $tsA <=> $tsB;
+    } elseif ($sortBy === 'CENTER_ID') {
+        $cmp = (int)$valA <=> (int)$valB;
+    } else {
+        $cmp = strnatcasecmp((string)$valA, (string)$valB);
+    }
+    
+    return $sortOrder === 'asc' ? $cmp : -$cmp;
+});
 
 // Пагинация
 $totalPages = max(1, (int)ceil($totalFiltered / $perPage));
@@ -146,6 +201,27 @@ if ($page > $totalPages) $page = $totalPages;
 
 $offset = ($page - 1) * $perPage;
 $pageItems = array_slice($filteredItems, $offset, $perPage);
+
+$queryParams = $_GET;
+$buildSortUrl = function($col) use ($sortBy, $sortOrder, $queryParams) {
+    $nextOrder = ($sortBy === $col && $sortOrder === 'asc') ? 'desc' : 'asc';
+    $params = $queryParams;
+    $params['sort'] = $col;
+    $params['order'] = $nextOrder;
+    unset($params['page']);
+    return '?' . http_build_query($params);
+};
+
+$renderSortHeader = function($col, $title) use ($sortBy, $sortOrder, $buildSortUrl) {
+    $isActive = ($sortBy === $col);
+    $icon = $isActive ? ($sortOrder === 'asc' ? ' ▲' : ' ▼') : ' <span style="opacity:0.35; font-size:10px;">⇅</span>';
+    $url = $buildSortUrl($col);
+    $style = 'cursor:pointer; white-space:nowrap; user-select:none; ' . ($isActive ? 'color:#2563eb; background:#eff6ff;' : '');
+    return '<th style="' . $style . '" onclick="location.href=\'' . $url . '\'">' .
+           '<a href="' . $url . '" style="color:inherit; text-decoration:none; display:inline-flex; align-items:center; gap:4px;">' .
+           htmlspecialcharsbx($title) . $icon .
+           '</a></th>';
+};
 
 require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admin_after.php");
 ?>
@@ -158,7 +234,7 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
 
 .tb-stats-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     gap: 12px;
     margin-bottom: 20px;
 }
@@ -201,6 +277,7 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
 }
 
 .tb-stat-blue { color: #0284c7; border-top: 4px solid #38bdf8; }
+.tb-stat-cyan { color: #0891b2; border-top: 4px solid #06b6d4; }
 .tb-stat-yellow { color: #d97706; border-top: 4px solid #fbbf24; }
 .tb-stat-green { color: #16a34a; border-top: 4px solid #4ade80; }
 .tb-stat-indigo { color: #4f46e5; border-top: 4px solid #818cf8; }
@@ -273,7 +350,7 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
     background: #ffffff;
     border: 1px solid #cbd5e1;
     border-radius: 8px;
-    overflow: hidden;
+    overflow-x: auto;
     box-shadow: 0 1px 3px rgba(0,0,0,0.05);
 }
 
@@ -288,17 +365,22 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
     background: #f8fafc;
     color: #475569;
     font-weight: 600;
-    padding: 10px 14px;
+    padding: 10px 12px;
     border-bottom: 1px solid #e2e8f0;
     font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.3px;
+    transition: background-color 0.15s;
+}
+
+.tb-table th:hover {
+    background-color: #f1f5f9;
 }
 
 .tb-table td {
-    padding: 11px 14px;
+    padding: 10px 12px;
     border-bottom: 1px solid #f1f5f9;
     color: #334155;
+    vertical-align: middle;
 }
 
 .tb-table tbody tr {
@@ -312,10 +394,11 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
 
 .tb-badge {
     display: inline-block;
-    padding: 3px 10px;
+    padding: 3px 8px;
     border-radius: 12px;
     font-size: 11px;
     font-weight: 600;
+    white-space: nowrap;
 }
 
 .badge-new { background: #fef3c7; color: #b45309; }
@@ -330,8 +413,9 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
     padding: 2px 6px;
     border-radius: 4px;
     border: 1px solid #cbd5e1;
-    font-weight: 600;
+    font-weight: 700;
     color: #0f172a;
+    font-size: 12px;
 }
 
 .tb-pagination-bar {
@@ -391,12 +475,18 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
     <div class="tb-nav-tabs" style="display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 2px solid #e2e8f0; padding-bottom: 0;">
         <a href="aikos_tirebooking_list.php?lang=<?=LANGUAGE_ID?>" class="tb-nav-tab active" style="padding: 10px 18px; font-weight: 600; text-decoration: none; color: #2563eb; border-bottom: 3px solid #2563eb; margin-bottom: -2px;">📋 Отслеживание записей</a>
         <a href="aikos_tirebooking_analytics.php?lang=<?=LANGUAGE_ID?>" class="tb-nav-tab" style="padding: 10px 18px; font-weight: 600; text-decoration: none; color: #64748b; border-bottom: 3px solid transparent; margin-bottom: -2px;">📊 Анализ и Дашборды</a>
+        <a href="aikos_tirebooking_settings.php?lang=<?=LANGUAGE_ID?>" class="tb-nav-tab" style="padding: 10px 18px; font-weight: 600; text-decoration: none; color: #64748b; border-bottom: 3px solid transparent; margin-bottom: -2px;">⚙️ Настройки и Блокировка записей</a>
     </div>
 
     <div class="tb-stats-grid">
         <div class="tb-stat-card tb-stat-blue">
             <div class="tb-stat-value"><?=number_format($periodStats['total'], 0, '', ' ')?></div>
             <div class="tb-stat-label">Всего записей</div>
+        </div>
+
+        <div class="tb-stat-card tb-stat-cyan">
+            <div class="tb-stat-value"><?=number_format($totalFiltered, 0, '', ' ')?></div>
+            <div class="tb-stat-label">Отфильтровано</div>
         </div>
 
         <?php $isTodayActive = ($dateFrom === $todayStr && $dateTo === $todayStr); ?>
@@ -426,6 +516,9 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
 
     <div class="tb-filter-panel">
         <form method="get" action="" id="tb-filter-form" class="tb-filter-row">
+            <input type="hidden" name="sort" value="<?=htmlspecialcharsbx($sortBy)?>">
+            <input type="hidden" name="order" value="<?=htmlspecialcharsbx($sortOrder)?>">
+
             <div class="tb-filter-group">
                 <label>Поиск (ФИО / Тел / Госномер):</label>
                 <input type="text" name="SEARCH" value="<?=htmlspecialcharsbx($searchQuery)?>" placeholder="Поиск по клиенту..." class="tb-filter-input" style="width: 220px;">
@@ -463,7 +556,7 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
 
             <div style="display: flex; gap: 8px;">
                 <button type="submit" class="tb-btn tb-btn-primary">🔍 Применить</button>
-                <a href="?" class="tb-btn tb-btn-secondary">✖ Сбросить</a>
+                <a href="aikos_tirebooking_list.php?lang=<?=LANGUAGE_ID?>&reset=Y" class="tb-btn tb-btn-secondary">✖ Сбросить</a>
             </div>
         </form>
     </div>
@@ -472,40 +565,53 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
         <table class="tb-table">
             <thead>
                 <tr>
-                    <th>ID</th>
-                    <th>Клиент / Запись</th>
-                    <th>Телефон</th>
-                    <th>Гос. номер</th>
-                    <th>Дата и время</th>
-                    <th>Статус</th>
-                    <th>Шинный центр</th>
+                    <?=$renderSortHeader('ID', 'ID')?>
+                    <?=$renderSortHeader('DATE_CREATE', 'Дата создания')?>
+                    <?=$renderSortHeader('CLIENT_NAME', 'Имя и фамилия')?>
+                    <?=$renderSortHeader('CLIENT_PHONE', 'Телефон')?>
+                    <?=$renderSortHeader('CAR_NUMBER', 'Гос. номер')?>
+                    <?=$renderSortHeader('BODY_TYPE', 'Тип кузова')?>
+                    <?=$renderSortHeader('TIRE_DIAMETER', 'Диаметр')?>
+                    <?=$renderSortHeader('DATE_TIME', 'Дата визита')?>
+                    <?=$renderSortHeader('IS_STORAGE', 'Хранение')?>
+                    <?=$renderSortHeader('NOTIFICATION_STATUS', 'Уведомление')?>
+                    <?=$renderSortHeader('CENTER_ID', 'Шинный центр')?>
                 </tr>
             </thead>
             <tbody>
                 <?php if (empty($pageItems)): ?>
                     <tr>
-                        <td colspan="7" style="text-align: center; padding: 30px; color: #94a3b8;">
+                        <td colspan="11" style="text-align: center; padding: 30px; color: #94a3b8;">
                             Записи по выбранному фильтру не найдены
                         </td>
                     </tr>
                 <?php else: ?>
                     <?php foreach ($pageItems as $item): 
-                        $st = mb_strtolower($item['STATUS']);
-                        $badgeClass = 'badge-new';
-                        if (strpos($st, 'подтвержд') !== false) $badgeClass = 'badge-confirmed';
-                        elseif (strpos($st, 'работ') !== false || strpos($st, 'процесс') !== false) $badgeClass = 'badge-progress';
-                        elseif (strpos($st, 'заверш') !== false) $badgeClass = 'badge-completed';
-                        elseif (strpos($st, 'отмен') !== false) $badgeClass = 'badge-cancelled';
+                        $isStorage = !empty($item['IS_STORAGE']) && mb_strtolower($item['IS_STORAGE']) !== 'нет' && mb_strtolower($item['IS_STORAGE']) !== 'n' && mb_strtolower($item['IS_STORAGE']) !== '0';
+                        $notif = $item['NOTIFICATION_STATUS'];
+                        if (!$notif && in_array(mb_strtolower($item['NAME']), ['ожидание', 'уведомлен', 'уведомлено'])) {
+                            $notif = $item['NAME'];
+                        }
+                        $notifLower = mb_strtolower((string)$notif);
+                        $notifBadge = 'badge-new';
+                        if (strpos($notifLower, 'уведомлен') !== false) $notifBadge = 'badge-confirmed';
+                        elseif (strpos($notifLower, 'ожидан') !== false) $notifBadge = 'badge-progress';
+
+                        $bodyDetected = AnalyticsManager::detectBodyType($item);
+                        $diamDetected = AnalyticsManager::detectTireDiameter($item);
+                        $bodyDisplay = ($bodyDetected !== 'Не заполнено') ? $bodyDetected : ($item['BODY_TYPE'] ?: '—');
+                        $diamDisplay = ($diamDetected !== 'Не заполнено') ? $diamDetected : ($item['TIRE_DIAMETER'] ? mb_strtoupper($item['TIRE_DIAMETER']) : '—');
                     ?>
                         <tr onclick="showDetails(<?=htmlspecialcharsbx(json_encode($item, JSON_HEX_APOS | JSON_HEX_QUOT))?>)">
                             <td><strong>#<?=$item['ID']?></strong></td>
+                            <td style="white-space: nowrap; font-size: 12px; color: #64748b;"><?=htmlspecialcharsbx($item['DATE_CREATE'])?></td>
                             <td>
                                 <div style="font-weight: 600; color: #0f172a;"><?=htmlspecialcharsbx($item['CLIENT_NAME'])?></div>
-                                <?php if ($item['SERVICE_NAME']): ?>
-                                    <div style="font-size: 11px; color: #64748b;"><?=htmlspecialcharsbx($item['SERVICE_NAME'])?></div>
+                                <?php if (!empty($item['IIN'])): ?>
+                                    <div style="font-size: 11px; color: #94a3b8;">ИИН: <?=htmlspecialcharsbx($item['IIN'])?></div>
                                 <?php endif; ?>
                             </td>
-                            <td><?=htmlspecialcharsbx($item['CLIENT_PHONE'] ?: '—')?></td>
+                            <td style="white-space: nowrap;"><?=htmlspecialcharsbx($item['CLIENT_PHONE'] ?: '—')?></td>
                             <td>
                                 <?php if ($item['CAR_NUMBER']): ?>
                                     <span class="car-badge"><?=htmlspecialcharsbx($item['CAR_NUMBER'])?></span>
@@ -513,13 +619,24 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
                                     —
                                 <?php endif; ?>
                             </td>
-                            <td><?=htmlspecialcharsbx($item['DATE_TIME'])?></td>
+                            <td><?=htmlspecialcharsbx($bodyDisplay)?></td>
+                            <td><strong><?=htmlspecialcharsbx($diamDisplay)?></strong></td>
+                            <td style="white-space: nowrap; font-weight: 500;"><?=htmlspecialcharsbx($item['DATE_TIME'])?></td>
                             <td>
-                                <span class="tb-badge <?=$badgeClass?>">
-                                    <?=htmlspecialcharsbx($item['STATUS'])?>
-                                </span>
+                                <?php if ($isStorage): ?>
+                                    <span class="tb-badge badge-confirmed">Да<?=$item['STORAGE_CONTRACT'] ? ' (№' . htmlspecialcharsbx($item['STORAGE_CONTRACT']) . ')' : ''?></span>
+                                <?php else: ?>
+                                    <span style="color: #94a3b8;">Нет</span>
+                                <?php endif; ?>
                             </td>
                             <td>
+                                <?php if ($notif): ?>
+                                    <span class="tb-badge <?=$notifBadge?>"><?=htmlspecialcharsbx($notif)?></span>
+                                <?php else: ?>
+                                    <span style="color: #94a3b8;">—</span>
+                                <?php endif; ?>
+                            </td>
+                            <td style="font-size: 12px;">
                                 <?=$centers[$item['CENTER_ID']] ?? ($item['CENTER_NAME'] ?: ($item['CENTER_ID'] ? 'Центр #'.$item['CENTER_ID'] : '—'))?>
                             </td>
                         </tr>
@@ -533,11 +650,11 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
                 $startItem = $offset + 1;
                 $endItem = min($offset + $perPage, $totalFiltered);
                 
-                $queryParams = $_GET;
-                unset($queryParams['page']);
-                $buildUrl = function($p) use ($queryParams) {
-                    $queryParams['page'] = $p;
-                    return '?' . http_build_query($queryParams);
+                $pageQueryParams = $_GET;
+                unset($pageQueryParams['page']);
+                $buildUrl = function($p) use ($pageQueryParams) {
+                    $pageQueryParams['page'] = $p;
+                    return '?' . http_build_query($pageQueryParams);
                 };
             ?>
             <div class="tb-pagination-bar">
@@ -563,7 +680,7 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
 </div>
 
 <div id="detail-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(15,23,42,0.5); z-index:9999; justify-content:center; align-items:center;">
-    <div style="background:#fff; border-radius:12px; max-width:600px; width:90%; padding:24px; box-shadow:0 20px 25px -5px rgba(0,0,0,0.1);">
+    <div style="background:#fff; border-radius:12px; max-width:650px; width:90%; padding:24px; box-shadow:0 20px 25px -5px rgba(0,0,0,0.1);">
         <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #e2e8f0; padding-bottom:12px; margin-bottom:16px;">
             <h3 style="margin:0; font-size:18px; color:#0f172a;" id="modal-title">Детали записи</h3>
             <button onclick="closeModal()" style="background:none; border:none; font-size:20px; cursor:pointer; color:#64748b;">✕</button>
@@ -584,17 +701,29 @@ function filterByPeriod(from, to) {
 
 function showDetails(item) {
     document.getElementById('modal-title').innerText = 'Запись на шиномонтаж #' + item.ID;
+    
+    var storageStr = item.IS_STORAGE || 'Нет';
+    if (item.STORAGE_CONTRACT) {
+        storageStr += ' (Договор №' + item.STORAGE_CONTRACT + ')';
+    }
+
     var html = '<div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">' +
-        '<div><strong>Клиент:</strong> ' + (item.CLIENT_NAME || '—') + '</div>' +
+        '<div><strong>Клиент (ФИО):</strong> ' + (item.CLIENT_NAME || '—') + '</div>' +
         '<div><strong>Телефон:</strong> ' + (item.CLIENT_PHONE || '—') + '</div>' +
         '<div><strong>Гос. номер:</strong> ' + (item.CAR_NUMBER || '—') + '</div>' +
-        '<div><strong>Дата и время:</strong> ' + (item.DATE_TIME || '—') + '</div>' +
-        '<div><strong>Статус:</strong> ' + (item.STATUS || '—') + '</div>' +
+        '<div><strong>Тип кузова:</strong> ' + (item.BODY_TYPE || '—') + '</div>' +
+        '<div><strong>Диаметр шин:</strong> ' + (item.TIRE_DIAMETER || '—') + '</div>' +
+        '<div><strong>Дата визита:</strong> ' + (item.DATE_TIME || '—') + '</div>' +
+        '<div><strong>Дата создания:</strong> ' + (item.DATE_CREATE || '—') + '</div>' +
+        '<div><strong>Хранение:</strong> ' + storageStr + '</div>' +
+        '<div><strong>Уведомление:</strong> ' + (item.NOTIFICATION_STATUS || item.NAME || '—') + '</div>' +
+        (item.IIN ? '<div><strong>ИИН:</strong> ' + item.IIN + '</div>' : '') +
         '<div><strong>Шинный центр:</strong> ' + (item.CENTER_NAME || item.CENTER_ID || '—') + '</div>' +
+        '<div><strong>Статус:</strong> ' + (item.STATUS || '—') + '</div>' +
         '</div>';
     
     if (item.COMMENT) {
-        html += '<div style="margin-top:14px; background:#f8fafc; padding:10px; border-radius:6px; border:1px solid #e2e8f0;"><strong>Комментарий:</strong><br>' + item.COMMENT + '</div>';
+        html += '<div style="margin-top:14px; background:#f8fafc; padding:10px; border-radius:6px; border:1px solid #e2e8f0;"><strong>Комментарий / Услуга:</strong><br>' + item.COMMENT + '</div>';
     }
     
     document.getElementById('modal-content').innerHTML = html;

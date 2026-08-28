@@ -1,7 +1,13 @@
 <?php
 use Bitrix\Main\Localization\Loc;
+use Bitrix\Main\Config\Option;
+use Bitrix\Main\Loader;
 
-if ($APPLICATION->GetGroupRight("aikos.tirebooking") > "D") {
+$bookingIb = (int)Option::get("aikos.tirebooking", "IBLOCK_BOOKING_ID", 80);
+$hasIblockAccess = Loader::includeModule("iblock") && (\CIBlock::GetPermission($bookingIb) > "D");
+$hasModuleAccess = $APPLICATION->GetGroupRight("aikos.tirebooking") > "D";
+
+if ($hasModuleAccess || $hasIblockAccess) {
     $aMenu = array(
         "parent_menu" => "global_menu_services",
         "section" => "aikos_tirebooking",
@@ -23,6 +29,12 @@ if ($APPLICATION->GetGroupRight("aikos.tirebooking") > "D") {
                 "url" => "aikos_tirebooking_analytics.php?lang=" . LANGUAGE_ID,
                 "more_url" => array("aikos_tirebooking_analytics.php"),
                 "title" => "Аналитика, дашборды и наглядные графики",
+            ),
+            array(
+                "text" => "Настройки и Блокировки",
+                "url" => "aikos_tirebooking_settings.php?lang=" . LANGUAGE_ID,
+                "more_url" => array("aikos_tirebooking_settings.php"),
+                "title" => "Отключение записи на шиномонтаж и журнал действий менеджеров",
             )
         )
     );

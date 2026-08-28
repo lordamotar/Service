@@ -10,21 +10,58 @@ $MODULE_ID = "aikos.tirebooking";
 Loader::includeModule($MODULE_ID);
 Loader::includeModule("iblock");
 
+$bookingIb = (int)\Bitrix\Main\Config\Option::get($MODULE_ID, "IBLOCK_BOOKING_ID", 80);
+$hasIblockAccess = \CIBlock::GetPermission($bookingIb) > "D";
 $POST_RIGHT = $APPLICATION->GetGroupRight($MODULE_ID);
-if ($POST_RIGHT <= "D") {
+if ($POST_RIGHT <= "D" && !$hasIblockAccess) {
     $APPLICATION->AuthForm(GetMessage("ACCESS_DENIED"));
 }
 
 $APPLICATION->SetTitle("Анализ и Дашборды - Шиномонтаж");
 
-// Параметры фильтрации
-$dateFrom = trim($_REQUEST['DATE_FROM'] ?? '');
-$dateTo = trim($_REQUEST['DATE_TO'] ?? '');
-$centerId = isset($_REQUEST['CENTER_ID']) ? (int)$_REQUEST['CENTER_ID'] : 0;
-$clientType = trim($_REQUEST['CLIENT_TYPE'] ?? 'all');
-$tireDiameter = trim($_REQUEST['TIRE_DIAMETER'] ?? 'all');
-$storageOnly = trim($_REQUEST['STORAGE_ONLY'] ?? 'all');
-$activeScreen = isset($_REQUEST['SCREEN']) ? max(1, min(2, (int)$_REQUEST['SCREEN'])) : 1;
+// Персональные настройки фильтра текущего менеджера через CUserOptions
+$userSavedOptions = \CUserOptions::GetOption($MODULE_ID, 'analytics_filter', []);
+
+if (isset($_REQUEST['reset']) && $_REQUEST['reset'] === 'Y') {
+    \CUserOptions::DeleteOption($MODULE_ID, 'analytics_filter');
+    LocalRedirect("aikos_tirebooking_analytics.php?lang=" . LANGUAGE_ID);
+}
+
+if (isset($_REQUEST['DATE_FROM']) || isset($_REQUEST['CENTER_ID']) || isset($_REQUEST['CLIENT_TYPE']) || isset($_REQUEST['TIRE_DIAMETER'])) {
+    $dateFrom = trim($_REQUEST['DATE_FROM'] ?? '');
+    $dateTo = trim($_REQUEST['DATE_TO'] ?? '');
+    $centerId = isset($_REQUEST['CENTER_ID']) ? (int)$_REQUEST['CENTER_ID'] : 0;
+    $clientType = trim($_REQUEST['CLIENT_TYPE'] ?? 'all');
+    $tireDiameter = trim($_REQUEST['TIRE_DIAMETER'] ?? 'all');
+    $storageOnly = trim($_REQUEST['STORAGE_ONLY'] ?? 'all');
+    $activeScreen = isset($_REQUEST['SCREEN']) ? max(1, min(2, (int)$_REQUEST['SCREEN'])) : 1;
+
+    \CUserOptions::SetOption($MODULE_ID, 'analytics_filter', [
+        'DATE_FROM' => $dateFrom,
+        'DATE_TO' => $dateTo,
+        'CENTER_ID' => $centerId,
+        'CLIENT_TYPE' => $clientType,
+        'TIRE_DIAMETER' => $tireDiameter,
+        'STORAGE_ONLY' => $storageOnly,
+        'SCREEN' => $activeScreen,
+    ]);
+} elseif (!empty($userSavedOptions) && is_array($userSavedOptions)) {
+    $dateFrom = $userSavedOptions['DATE_FROM'] ?? '';
+    $dateTo = $userSavedOptions['DATE_TO'] ?? '';
+    $centerId = (int)($userSavedOptions['CENTER_ID'] ?? 0);
+    $clientType = $userSavedOptions['CLIENT_TYPE'] ?? 'all';
+    $tireDiameter = $userSavedOptions['TIRE_DIAMETER'] ?? 'all';
+    $storageOnly = $userSavedOptions['STORAGE_ONLY'] ?? 'all';
+    $activeScreen = (int)($userSavedOptions['SCREEN'] ?? 1);
+} else {
+    $dateFrom = '';
+    $dateTo = '';
+    $centerId = 0;
+    $clientType = 'all';
+    $tireDiameter = 'all';
+    $storageOnly = 'all';
+    $activeScreen = 1;
+}
 
 $centers = CenterManager::getCenters();
 
@@ -46,6 +83,23 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
 
 <!-- Chart.js для отрисовки графиков -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+function switchScreen(screenNum) {
+    var s1 = document.getElementById('screen-container-1');
+    var s2 = document.getElementById('screen-container-2');
+    var b1 = document.getElementById('btn-screen-1');
+    var b2 = document.getElementById('btn-screen-2');
+    var inp = document.getElementById('inputScreen');
+
+    if (s1) s1.style.display = (screenNum === 1) ? 'block' : 'none';
+    if (s2) s2.style.display = (screenNum === 2) ? 'block' : 'none';
+    
+    if (b1) b1.classList.toggle('active', screenNum === 1);
+    if (b2) b2.classList.toggle('active', screenNum === 2);
+    
+    if (inp) inp.value = screenNum;
+}
+</script>
 
 <style>
 .tb-analytics-container {
@@ -361,6 +415,7 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
     <div class="tb-nav-tabs">
         <a href="aikos_tirebooking_list.php?lang=<?=LANGUAGE_ID?>" class="tb-nav-tab">📋 Отслеживание записей</a>
         <a href="aikos_tirebooking_analytics.php?lang=<?=LANGUAGE_ID?>" class="tb-nav-tab active">📊 Анализ и Дашборды</a>
+        <a href="aikos_tirebooking_settings.php?lang=<?=LANGUAGE_ID?>" class="tb-nav-tab">⚙️ Настройки и Блокировка записей</a>
     </div>
 
     <!-- ЕДИНАЯ ПАНЕЛЬ ФИЛЬТРОВ-СРЕЗОВ -->
@@ -419,7 +474,7 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
 
             <div style="display:flex; gap:6px;">
                 <button type="submit" class="tb-btn-primary">🔍 Применить срез</button>
-                <a href="aikos_tirebooking_analytics.php?lang=<?=LANGUAGE_ID?>" class="tb-btn-secondary">✖ Сбросить</a>
+                <a href="aikos_tirebooking_analytics.php?lang=<?=LANGUAGE_ID?>&reset=Y" class="tb-btn-secondary">✖ Сбросить</a>
             </div>
         </form>
     </div>
@@ -504,11 +559,11 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
                 </div>
             </div>
 
-            <!-- 1.3 ДИНАМИКА ЗАПИСЕЙ ПО ДНЯМ -->
+            <!-- 1.3 ДИНАМИКА ЗАПИСЕЙ -->
             <div class="tb-widget-card">
                 <div class="tb-widget-title">
-                    <span>📉 [ ДИНАМИКА ЗАПИСЕЙ ПО ДНЯМ ]</span>
-                    <span style="font-size:11px; font-weight: normal; color:#64748b;">Среднее (<?=$b1['trend']['avg']?>/день)</span>
+                    <span>📉 [ ДИНАМИКА ЗАПИСЕЙ <?=($b1['trend']['mode'] ?? 'days') === 'weeks' ? '(ПО НЕДЕЛЯМ)' : '(ПО ДНЯМ)'?> ]</span>
+                    <span style="font-size:11px; font-weight: normal; color:#64748b;">Среднее (<?=$b1['trend']['avg']?>/<?=($b1['trend']['mode'] ?? 'days') === 'weeks' ? 'нед' : 'день'?>)</span>
                 </div>
                 <div class="tb-widget-body">
                     <canvas id="chartDynamics" style="max-height: 200px;"></canvas>
@@ -545,8 +600,9 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
         <!-- KPI 2 -->
         <div class="tb-kpi-grid">
             <div class="tb-kpi-card kpi-blue">
-                <div class="tb-kpi-title">ВСЕГО КЛИЕНТОВ</div>
-                <div class="tb-kpi-value"><?=number_format($b2['total_clients'], 0, '', ' ')?></div>
+                <div class="tb-kpi-title">ВСЕГО ЗАПИСЕЙ</div>
+                <div class="tb-kpi-value"><?=number_format($b2['total_records'], 0, '', ' ')?></div>
+                <div style="font-size: 11px; color: #64748b; margin-top: 2px;">Уникальных клиентов: <?=number_format($b2['total_clients'], 0, '', ' ')?></div>
             </div>
             <div class="tb-kpi-card kpi-green">
                 <div class="tb-kpi-title">ДОГОВОРОВ ХРАНЕНИЯ</div>
@@ -589,27 +645,34 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
             <div class="tb-widget-card">
                 <div class="tb-widget-title">
                     <span>🚘 [ СТРУКТУРА КУЗОВОВ АВТО ]</span>
+                    <span style="font-size:11px; font-weight: normal; color:#64748b;">Все типы кузовов</span>
                 </div>
                 <div class="tb-widget-body">
-                    <div class="tb-treemap-grid">
-                        <div class="tb-treemap-item" style="background: linear-gradient(135deg, #1e40af, #3b82f6); grid-column: span 1; grid-row: span 2;">
-                            <div class="tb-treemap-name">Седан</div>
-                            <div class="tb-treemap-val"><?=$b2['body_types']['Седан'] ?? 0?>%</div>
-                        </div>
-                        <div class="tb-treemap-item" style="background: linear-gradient(135deg, #0d9488, #14b8a6);">
-                            <div class="tb-treemap-name">Кроссовер</div>
-                            <div class="tb-treemap-val"><?=$b2['body_types']['Кроссовер'] ?? 0?>%</div>
-                        </div>
-                        <div class="tb-treemap-item" style="background: linear-gradient(135deg, #64748b, #475569); display:flex; flex-direction:row; justify-content:space-around;">
-                            <div>
-                                <div class="tb-treemap-name" style="font-size:12px;">Внедорожник</div>
-                                <div class="tb-treemap-val" style="font-size:15px;"><?=$b2['body_types']['Внедорожник'] ?? 0?>%</div>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; min-height: 180px; align-content: start;">
+                        <?php
+                        $bodyGradients = [
+                            'Легковой' => 'linear-gradient(135deg, #1e40af, #3b82f6)',
+                            'Кроссовер' => 'linear-gradient(135deg, #0d9488, #14b8a6)',
+                            'Внедорожник' => 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                            'Минивэн' => 'linear-gradient(135deg, #d97706, #f59e0b)',
+                            'Пикап' => 'linear-gradient(135deg, #ea580c, #f97316)',
+                            'Грузовой' => 'linear-gradient(135deg, #b91c1c, #ef4444)',
+                            'Купе' => 'linear-gradient(135deg, #7c3aed, #a855f7)',
+                            'Не заполнено' => 'linear-gradient(135deg, #64748b, #475569)',
+                        ];
+                        foreach ($b2['body_types'] as $btName => $btData): 
+                            $pct = is_array($btData) ? ($btData['percent'] ?? 0) : $btData;
+                            $cnt = is_array($btData) ? ($btData['count'] ?? 0) : 0;
+                            $grad = $bodyGradients[$btName] ?? 'linear-gradient(135deg, #0284c7, #38bdf8)';
+                        ?>
+                            <div style="background: <?=$grad?>; padding: 12px 8px; border-radius: 8px; text-align: center; color: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.06); display: flex; flex-direction: column; justify-content: center; min-height: 80px;">
+                                <div style="font-size: 13px; font-weight: 700;"><?=htmlspecialcharsbx($btName)?></div>
+                                <div style="font-size: 20px; font-weight: 800; margin-top: 4px;"><?=$pct?>%</div>
+                                <?php if ($cnt > 0): ?>
+                                    <div style="font-size: 11px; opacity: 0.9; margin-top: 2px;"><?=number_format($cnt, 0, '', ' ')?> шт.</div>
+                                <?php endif; ?>
                             </div>
-                            <div>
-                                <div class="tb-treemap-name" style="font-size:12px; color:#cbd5e1;">Не заполнено</div>
-                                <div class="tb-treemap-val" style="font-size:15px; color:#ffffff;"><?=$b2['body_types']['Не заполнено'] ?? 0?>%</div>
-                            </div>
-                        </div>
+                        <?php endforeach; ?>
                     </div>
                 </div>
             </div>
@@ -639,16 +702,6 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
 
 <!-- ИНИЦИАЛИЗАЦИЯ И УПРАВЛЕНИЕ ГРАФИКАМИ CHART.JS -->
 <script>
-function switchScreen(screenNum) {
-    document.getElementById('screen-container-1').style.display = (screenNum === 1) ? 'block' : 'none';
-    document.getElementById('screen-container-2').style.display = (screenNum === 2) ? 'block' : 'none';
-    
-    document.getElementById('btn-screen-1').classList.toggle('active', screenNum === 1);
-    document.getElementById('btn-screen-2').classList.toggle('active', screenNum === 2);
-    
-    document.getElementById('inputScreen').value = screenNum;
-}
-
 document.addEventListener('DOMContentLoaded', function() {
     if (typeof Chart === 'undefined') return;
 
@@ -792,7 +845,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 { label: 'R15', data: bodyTypesList.map(bt => stackedBodyData[bt]['R15'] || 0), backgroundColor: '#60a5fa' },
                 { label: 'R16', data: bodyTypesList.map(bt => stackedBodyData[bt]['R16'] || 0), backgroundColor: '#2563eb' },
                 { label: 'R17', data: bodyTypesList.map(bt => stackedBodyData[bt]['R17'] || 0), backgroundColor: '#1d4ed8' },
-                { label: 'R18+', data: bodyTypesList.map(bt => stackedBodyData[bt]['R18+'] || 0), backgroundColor: '#1e3a8a' }
+                { label: 'R18', data: bodyTypesList.map(bt => stackedBodyData[bt]['R18'] || 0), backgroundColor: '#1e3a8a' },
+                { label: 'R19+', data: bodyTypesList.map(bt => (stackedBodyData[bt]['R19+'] || 0) + (stackedBodyData[bt]['R18+'] || 0)), backgroundColor: '#312e81' },
+                { label: 'Не заполнено', data: bodyTypesList.map(bt => stackedBodyData[bt]['Не заполнено'] || 0), backgroundColor: '#94a3b8' }
             ]
         },
         options: {

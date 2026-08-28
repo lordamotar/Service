@@ -28,6 +28,12 @@ $aTabs = array(
         'ICON' => 'aikos_tirebooking_settings',
         'TITLE' => 'Настройки привязки инфоблоков шиномонтажа',
     ),
+    array(
+        'DIV' => 'edit2',
+        'TAB' => 'Права доступа',
+        'ICON' => 'aikos_tirebooking_settings',
+        'TITLE' => 'Права доступа к модулю',
+    ),
 );
 
 $tabControl = new CAdminTabControl('tabControl', $aTabs);
@@ -38,6 +44,11 @@ if ($request->isPost() && check_bitrix_sessid()) {
         Option::set($module_id, 'IBLOCK_CENTER_ID', (int)$request->getPost('IBLOCK_CENTER_ID'));
         Option::set($module_id, 'IBLOCK_SERVICE_ID', (int)$request->getPost('IBLOCK_SERVICE_ID'));
         Option::set($module_id, 'IBLOCK_POST_ID', (int)$request->getPost('IBLOCK_POST_ID'));
+
+        ob_start();
+        $Update = $request->getPost('Update');
+        require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/admin/group_rights.php");
+        ob_end_clean();
 
         CAdminMessage::ShowNote('Настройки успешно сохранены');
     }
@@ -101,6 +112,8 @@ $tabControl->Begin();
             </select>
         </td>
     </tr>
+    <?php $tabControl->BeginNextTab(); ?>
+    <?php require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/admin/group_rights.php"); ?>
     <?php $tabControl->Buttons(); ?>
     <input type="submit" name="Update" value="Сохранить настройки" title="Сохранить изменения" class="adm-btn-save">
     <?php $tabControl->End(); ?>

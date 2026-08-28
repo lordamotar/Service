@@ -12,6 +12,7 @@ class aikos_tirebooking extends CModule
     public $MODULE_VERSION_DATE;
     public $MODULE_NAME;
     public $MODULE_DESCRIPTION;
+    public $MODULE_GROUP_RIGHTS = "Y";
 
     public function __construct()
     {
