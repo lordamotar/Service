@@ -49,9 +49,248 @@ class BookingManager
         return $count;
     }
 
-    /**
-     * Получение сводной статистики записей для гаджетов и панелей
-     */
+    /*
+    // Создание новой записи бронирования шиномонтажа
+    public static function createBooking(array $data)
+    {
+        if (!Loader::includeModule('iblock')) {
+            return ['success' => false, 'error' => 'Модуль Инфоблоков не подключен'];
+        }
+
+        $iblockId = self::getBookingIblockId();
+        
+        $clientName = trim((string)($data['CLIENT_NAME'] ?? ''));
+        $rawPhone = preg_replace('/[^\d]/', '', (string)($data['CLIENT_PHONE'] ?? ''));
+        if (strlen($rawPhone) === 11 && ($rawPhone[0] === '8' || $rawPhone[0] === '7')) {
+            $clientPhone = '7' . substr($rawPhone, 1);
+        } else {
+            $clientPhone = $rawPhone;
+        }
+        $carNumber = trim((string)($data['CAR_NUMBER'] ?? ''));
+        $bodyType = trim((string)($data['BODY_TYPE'] ?? 'Легковой'));
+        $tireDiameter = trim((string)($data['TIRE_DIAMETER'] ?? 'R16'));
+        $visitDate = trim((string)($data['VISIT_DATE'] ?? ''));
+        $isStorage = trim((string)($data['IS_STORAGE'] ?? 'Нет'));
+        $storageContract = trim((string)($data['STORAGE_CONTRACT'] ?? ''));
+        $notification = trim((string)($data['NOTIFICATION_STATUS'] ?? 'Ожидание'));
+        $iin = trim((string)($data['IIN'] ?? ''));
+        $centerId = (int)($data['CENTER_ID'] ?? 0);
+        $postName = trim((string)($data['POST_NAME'] ?? 'пост 1'));
+        $comment = trim((string)($data['COMMENT'] ?? ''));
+
+        if (empty($visitDate)) {
+            $visitDate = date('d.m.Y H:i:s');
+        } else {
+            $ts = strtotime($visitDate);
+            if ($ts) {
+                $visitDate = date('d.m.Y H:i:s', $ts);
+            }
+        }
+
+        // Получаем название шинного центра для формирования интервала
+        $centers = CenterManager::getCenters();
+        $centerTitle = $centers[$centerId] ?? '';
+        if (empty($centerTitle) && $centerId > 0) {
+            $cRes = \CIBlockElement::GetByID($centerId)->Fetch();
+            if ($cRes) {
+                $centerTitle = $cRes['NAME'];
+            }
+        }
+        if (empty($centerTitle)) {
+            $centerTitle = 'Шинный центр';
+        }
+
+        // Формируем точную строку интервала для сайта (например: "г. Семей ул. Бозтаева 106 Пост 1 - 01.11.2026 12:00:00 - Шиномонтажные услуги")
+        $postNum = preg_replace('/[^\d]/', '', $postName) ?: '1';
+        $postFormatted = 'Пост ' . $postNum;
+        $reservedIntervalStr = trim($centerTitle) . ' ' . $postFormatted . ' - ' . $visitDate . ' - Шиномонтажные услуги';
+
+        $el = new \CIBlockElement();
+        $propValues = [];
+
+        // Автоматическая привязка к свойствам инфоблока
+        $dbProps = \CIBlockProperty::GetList(['SORT' => 'ASC'], ['IBLOCK_ID' => $iblockId]);
+        while ($p = $dbProps->Fetch()) {
+            $pCode = mb_strtoupper((string)$p['CODE']);
+            $pName = mb_strtolower(trim((string)$p['NAME']), 'UTF-8');
+            $pId = $p['ID'];
+            $pType = $p['PROPERTY_TYPE'];
+            $pMultiple = ($p['MULTIPLE'] === 'Y');
+            $targetKey = !empty($pCode) ? $pCode : $pId;
+
+            // 1. ЗАБРОНИРОВАННЫЕ ИНТЕРВАЛЫ (главное свойство для блокировки времени на сайте)
+            if (mb_strpos($pName, 'забронированные') !== false || in_array($pCode, ['RESERVED_INTERVALS', 'BOOKED_INTERVALS', 'INTERVALS', 'BOOKING_INTERVALS'])) {
+                $propValues[$targetKey] = [$reservedIntervalStr];
+                continue;
+            }
+
+            // 2. НАЧАЛО ПЕРВОГО ИНТЕРВАЛА (дата и время визита)
+            if (mb_strpos($pName, 'начало первого интервала') !== false || mb_strpos($pName, 'первый интервал') !== false || mb_strpos($pName, 'начало') !== false || in_array($pCode, ['TIME_FIRST_INTERVAL', 'FIRST_INTERVAL'])) {
+                $propValues[$targetKey] = $visitDate;
+                continue;
+            }
+
+            // 3. Имя и фамилия клиента (ФИО)
+            if (mb_strpos($pName, 'имя и фамилия') !== false || mb_strpos($pName, 'имя клиента') !== false || in_array($pCode, ['FIO', 'CLIENT_NAME', 'USER_NAME', 'NAME_CLIENT', 'CLIENT_FIO', 'NAME_AND_SURNAME', 'FULL_NAME', 'CUSTOMER', 'NAME_SURNAME', 'FIRST_NAME', 'LAST_NAME'])
+                || (mb_strpos($pName, 'имя') !== false && mb_strpos($pName, 'файл') === false)
+                || (mb_strpos($pName, 'клиент') !== false && mb_strpos($pName, 'уведомл') === false && mb_strpos($pName, 'тип') === false)) {
+                $propValues[$targetKey] = $clientName;
+                continue;
+            }
+
+            // 4. Телефон
+            if (mb_strpos($pName, 'телефон') !== false || mb_strpos($pName, 'тел') !== false || in_array($pCode, ['PHONE', 'TEL', 'CLIENT_PHONE', 'TELEPHONE', 'MOBILE'])) {
+                $propValues[$targetKey] = $clientPhone;
+                continue;
+            }
+
+            // 5. Госномер авто
+            if (mb_strpos($pName, 'гос. номер') !== false || mb_strpos($pName, 'госномер') !== false || mb_strpos($pName, 'номер авто') !== false || in_array($pCode, ['CAR_NUMBER', 'GOS_NUMBER', 'GOS_NUM', 'STATE_NUMBER', 'AUTO_NUM', 'CAR', 'GOS', 'STATE_NUM', 'AUTO_NUMBER'])) {
+                $propValues[$targetKey] = $carNumber;
+                continue;
+            }
+
+            // 6. Тип кузова авто (сопоставление со списком ENUM)
+            if (mb_strpos($pName, 'тип кузова') !== false || mb_strpos($pName, 'тип авто') !== false || mb_strpos($pName, 'кузов') !== false || in_array($pCode, ['BODY_TYPE', 'CAR_BODY', 'AUTO_TYPE', 'BODY', 'TYPE_AUTO', 'CAR_TYPE', 'KUZOV', 'CAR_CLASS', 'AUTO_CLASS', 'BODYTYPE', 'VEHICLE_TYPE', 'CAR_BODY_TYPE', 'KUZOV_TYPE', 'TYPE_CAR', 'CLASS'])) {
+                if ($pType === 'L') {
+                    $matchedId = 0;
+                    $dbEnums = \CIBlockPropertyEnum::GetList(['SORT' => 'ASC'], ['PROPERTY_ID' => $pId]);
+                    while ($enum = $dbEnums->Fetch()) {
+                        $eVal = mb_strtolower(trim($enum['VALUE']), 'UTF-8');
+                        $eXml = mb_strtolower(trim($enum['XML_ID']), 'UTF-8');
+                        $bLower = mb_strtolower(trim($bodyType), 'UTF-8');
+                        if ($eVal === $bLower || $eXml === $bLower || ($bLower === 'кроссовер' && (strpos($eVal, 'кросс') !== false || strpos($eVal, 'cross') !== false)) || ($bLower === 'легковой' && (strpos($eVal, 'легк') !== false || strpos($eVal, 'седан') !== false || strpos($eVal, 'tyre') !== false)) || ($bLower === 'внедорожник' && (strpos($eVal, 'внедор') !== false || strpos($eVal, 'suv') !== false))) {
+                            $matchedId = $enum['ID'];
+                            break;
+                        }
+                    }
+                    $propValues[$targetKey] = $matchedId > 0 ? $matchedId : $bodyType;
+                } else {
+                    $propValues[$targetKey] = $bodyType;
+                }
+                continue;
+            }
+
+            // 7. Диаметр шин (сопоставление со списком ENUM)
+            if (mb_strpos($pName, 'диаметр шин') !== false || mb_strpos($pName, 'размер шин') !== false || (mb_strpos($pName, 'диаметр') !== false && mb_strpos($pName, 'центр') === false) || in_array($pCode, ['TIRE_DIAMETER', 'SHIN_DIAMETER', 'DIAMETER', 'WHEEL_SIZE', 'TIRE_SIZE', 'R_SIZE', 'DIAMETR'])) {
+                if ($pType === 'L') {
+                    $matchedId = 0;
+                    $dbEnums = \CIBlockPropertyEnum::GetList(['SORT' => 'ASC'], ['PROPERTY_ID' => $pId]);
+                    $tNum = preg_replace('/[^0-9]/', '', $tireDiameter);
+                    while ($enum = $dbEnums->Fetch()) {
+                        $eVal = mb_strtolower(trim($enum['VALUE']), 'UTF-8');
+                        $eNum = preg_replace('/[^0-9]/', '', $eVal);
+                        if ($eNum === $tNum && !empty($tNum)) {
+                            $matchedId = $enum['ID'];
+                            break;
+                        }
+                    }
+                    $propValues[$targetKey] = $matchedId > 0 ? $matchedId : $tireDiameter;
+                } else {
+                    $propValues[$targetKey] = $tireDiameter;
+                }
+                continue;
+            }
+
+            // 8. ACCEPT (подтверждение брони для блокировки на сайте)
+            if (mb_strpos($pName, 'accept') !== false || in_array($pCode, ['ACCEPT', 'ACCEPTED', 'CONFIRMED', 'STATUS_ACCEPT'])) {
+                if ($pType === 'L') {
+                    $enumRes = \CIBlockPropertyEnum::GetList([], ['PROPERTY_ID' => $pId, 'VALUE' => 'Да'])->Fetch();
+                    $propValues[$targetKey] = $enumRes ? $enumRes['ID'] : 'Да';
+                } else {
+                    $propValues[$targetKey] = 'Да';
+                }
+                continue;
+            }
+
+            // 9. Хранение шин
+            if (mb_strpos($pName, 'храните шины') !== false || mb_strpos($pName, 'хранение') !== false || in_array($pCode, ['STORAGE', 'IS_STORAGE', 'KHRANENIE'])) {
+                if ($pType === 'L') {
+                    $matchedId = 0;
+                    $dbEnums = \CIBlockPropertyEnum::GetList(['SORT' => 'ASC'], ['PROPERTY_ID' => $pId]);
+                    while ($enum = $dbEnums->Fetch()) {
+                        if (mb_strtolower(trim($enum['VALUE']), 'UTF-8') === mb_strtolower(trim($isStorage), 'UTF-8')) {
+                            $matchedId = $enum['ID'];
+                            break;
+                        }
+                    }
+                    $propValues[$targetKey] = $matchedId > 0 ? $matchedId : $isStorage;
+                } else {
+                    $propValues[$targetKey] = $isStorage;
+                }
+                continue;
+            }
+
+            // 10. Номер договора хранения
+            if (mb_strpos($pName, 'номер договора') !== false || mb_strpos($pName, 'договор хранения') !== false || in_array($pCode, ['STORAGE_CONTRACT', 'CONTRACT_NUMBER', 'CONTRACT_NUM', 'DOGOVOR_STORAGE', 'NUM_DOGOVOR', 'STORAGE_NUM'])) {
+                $propValues[$targetKey] = $storageContract;
+                continue;
+            }
+
+            // 11. Уведомление клиента за час
+            if (mb_strpos($pName, 'уведомление') !== false || mb_strpos($pName, 'уведомлен') !== false || mb_strpos($pName, 'оповещ') !== false || in_array($pCode, ['NOTIFICATION_STATUS', 'NOTIFY', 'NOTIFICATION', 'NOTIF', 'NOTIFIED', 'NOTIFY_STATUS', 'STATUS_NOTIFY'])) {
+                if ($pType === 'L') {
+                    $matchedId = 0;
+                    $dbEnums = \CIBlockPropertyEnum::GetList(['SORT' => 'ASC'], ['PROPERTY_ID' => $pId]);
+                    while ($enum = $dbEnums->Fetch()) {
+                        if (mb_strtolower(trim($enum['VALUE']), 'UTF-8') === mb_strtolower(trim($notification), 'UTF-8')) {
+                            $matchedId = $enum['ID'];
+                            break;
+                        }
+                    }
+                    $propValues[$targetKey] = $matchedId > 0 ? $matchedId : $notification;
+                } else {
+                    $propValues[$targetKey] = $notification;
+                }
+                continue;
+            }
+
+            // 12. ИИН
+            if (mb_strpos($pName, 'иин') !== false || in_array($pCode, ['IIN', 'BIN', 'CLIENT_IIN', 'CUSTOMER_IIN'])) {
+                $propValues[$targetKey] = $iin;
+                continue;
+            }
+
+            // 13. Шинный центр
+            if (mb_strpos($pName, 'центр') !== false || mb_strpos($pName, 'магазин') !== false || in_array($pCode, ['CENTER', 'CENTER_ID', 'SHOP', 'STORE', 'POINT'])) {
+                $propValues[$targetKey] = $centerId;
+                continue;
+            }
+        }
+
+        $arFields = [
+            'IBLOCK_ID' => $iblockId,
+            'NAME' => $notification ?: 'Ожидание',
+            'ACTIVE' => 'Y',
+            'DATE_ACTIVE_FROM' => date('d.m.Y H:i:s'),
+            'PREVIEW_TEXT' => $comment,
+            'DETAIL_TEXT' => $comment,
+            'PROPERTY_VALUES' => $propValues,
+        ];
+
+        $newId = (int)$el->Add($arFields);
+
+        if ($newId > 0) {
+            // Принудительно и гарантированно перезаписываем свойства через SetPropertyValuesEx
+            \CIBlockElement::SetPropertyValuesEx($newId, $iblockId, $propValues);
+
+            // Очищаем кэш инфоблока и модуля
+            if (class_exists('\CIBlock')) {
+                \CIBlock::clearIblockTagCache($iblockId);
+            }
+            if (function_exists('BXClearCache')) {
+                \BXClearCache(true);
+            }
+            $cache = Cache::createInstance();
+            $cache->cleanDir('/aikos_tirebooking/');
+
+            return ['success' => true, 'id' => $newId];
+        }
+
+        return ['success' => false, 'error' => $el->LAST_ERROR ?: 'Ошибка при сохранении записи'];
+    }
+    */
+
     public static function getStats(array $filter = [])
     {
         $cache = Cache::createInstance();
@@ -355,10 +594,31 @@ class BookingManager
             }
         }
 
+        $createdBy = (int)($fields['CREATED_BY'] ?? 0);
+        $createdUserName = trim((string)($fields['CREATED_USER_NAME'] ?? ''));
+
+        $isAi = ($createdBy === 8640 || strpos($createdUserName, 'oneit') !== false || strpos($createdUserName, 'Иван Леонов') !== false);
+
+        if ($isAi) {
+            $creatorDisplay = 'ИИ Ассистент';
+        } elseif ($createdBy > 0) {
+            if (!empty($createdUserName)) {
+                $creatorDisplay = '[' . $createdBy . '] ' . $createdUserName;
+            } else {
+                $creatorDisplay = 'Пользователь #' . $createdBy;
+            }
+        } else {
+            $creatorDisplay = 'Сайт';
+        }
+
         return [
             'ID' => $fields['ID'],
             'NAME' => $rawElementName,
             'DATE_CREATE' => $fields['DATE_CREATE'],
+            'CREATED_BY' => $createdBy,
+            'CREATED_USER_NAME' => $createdUserName,
+            'IS_AI' => $isAi,
+            'CREATOR_DISPLAY' => $creatorDisplay,
             'CENTER_ID' => $centerId,
             'CENTER_NAME' => $centerName,
             'SERVICE_NAME' => $serviceName,
@@ -380,22 +640,64 @@ class BookingManager
     }
 
     /**
+     * Подготовка массива фильтра для выборки инфоблока
+     */
+    public static function prepareFilter(array $filter = [])
+    {
+        $iblockId = self::getBookingIblockId();
+        $arFilter = ['IBLOCK_ID' => $iblockId, 'ACTIVE' => 'Y'];
+
+        $hasExplicitDate = false;
+
+        if (isset($filter['DATE_FROM']) || isset($filter['DATE_TO'])) {
+            $hasExplicitDate = true;
+            if (!empty($filter['DATE_FROM'])) {
+                $tsFrom = strtotime($filter['DATE_FROM']);
+                if ($tsFrom) {
+                    $arFilter['>=DATE_CREATE'] = date('d.m.Y 00:00:00', $tsFrom);
+                }
+            }
+            if (!empty($filter['DATE_TO'])) {
+                $tsTo = strtotime($filter['DATE_TO']);
+                if ($tsTo) {
+                    $arFilter['<=DATE_CREATE'] = date('d.m.Y 23:59:59', $tsTo);
+                }
+            }
+            unset($filter['DATE_FROM'], $filter['DATE_TO']);
+        }
+
+        foreach ($filter as $k => $v) {
+            if (strpos((string)$k, 'DATE_CREATE') !== false || strpos((string)$k, 'DATE_ACTIVE_FROM') !== false) {
+                $hasExplicitDate = true;
+            }
+            $arFilter[$k] = $v;
+        }
+
+        // Если дата в фильтре не выставлена явно и нет отдельного поиска по ID/ALLOW_ALL_DATES, по умолчанию показываем с начала 2026 года
+        if (!$hasExplicitDate && empty($filter['ID']) && empty($filter['ALLOW_ALL_DATES'])) {
+            $arFilter['>=DATE_CREATE'] = '01.01.2026 00:00:00';
+        }
+        unset($arFilter['ALLOW_ALL_DATES']);
+
+        return $arFilter;
+    }
+
+    /**
      * Высокоскоростной метод получения списка с кешированием и пакетированной выборкой
      */
-    public static function getList(array $filter = [], array $order = ['ID' => 'DESC'], $limit = 5000)
+    public static function getList(array $filter = [], array $order = ['ID' => 'DESC'], $limit = 0)
     {
         if (!Loader::includeModule('iblock')) return [];
 
         $iblockId = self::getBookingIblockId();
+        $arFilter = self::prepareFilter($filter);
         
         // Попытка получить данные из кеша
         $cache = Cache::createInstance();
-        $cacheId = 'b_list_v14_' . md5(serialize([$filter, $order, $limit, $iblockId]));
+        $cacheId = 'b_list_v16_' . md5(serialize([$arFilter, $order, $limit, $iblockId]));
         if ($cache->initCache(180, $cacheId, '/aikos_tirebooking/list/')) {
             return $cache->getVars();
         }
-
-        $arFilter = array_merge(['IBLOCK_ID' => $iblockId, 'ACTIVE' => 'Y'], $filter);
 
         // Формируем массовую выборку элемента со всеми полями PROPERTY_* за 1 SQL запрос
         $res = \CIBlockElement::GetList(
@@ -403,7 +705,7 @@ class BookingManager
             $arFilter,
             false,
             $limit > 0 ? ['nTopCount' => $limit] : false,
-            ['ID', 'NAME', 'DATE_CREATE', 'PREVIEW_TEXT', 'DETAIL_TEXT', 'PROPERTY_*']
+            ['ID', 'NAME', 'DATE_CREATE', 'CREATED_BY', 'CREATED_USER_NAME', 'PREVIEW_TEXT', 'DETAIL_TEXT', 'PROPERTY_*']
         );
 
         $items = [];
@@ -421,7 +723,7 @@ class BookingManager
 
         if (empty($items) && $iblockId == 80 && empty($filter)) {
             $arFilter['IBLOCK_ID'] = 94;
-            $res = \CIBlockElement::GetList($order, $arFilter, false, ['nTopCount' => $limit], ['ID', 'NAME', 'DATE_CREATE', 'PREVIEW_TEXT', 'DETAIL_TEXT', 'PROPERTY_*']);
+            $res = \CIBlockElement::GetList($order, $arFilter, false, $limit > 0 ? ['nTopCount' => $limit] : false, ['ID', 'NAME', 'DATE_CREATE', 'CREATED_BY', 'CREATED_USER_NAME', 'PREVIEW_TEXT', 'DETAIL_TEXT', 'PROPERTY_*']);
             while ($ob = $res->GetNextElement()) {
                 $fields = $ob->GetFields();
                 $props = $ob->GetProperties();

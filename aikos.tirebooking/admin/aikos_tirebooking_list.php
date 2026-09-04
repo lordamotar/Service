@@ -19,6 +19,23 @@ if ($POST_RIGHT <= "D" && !$hasIblockAccess) {
 
 $APPLICATION->SetTitle("Отслеживание и мониторинг записей шиномонтажа");
 
+/*
+// AJAX обработка создания новой записи
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_REQUEST['action']) && $_REQUEST['action'] === 'create_booking') {
+    $APPLICATION->RestartBuffer();
+    header('Content-Type: application/json; charset=UTF-8');
+    
+    if ($POST_RIGHT <= "D" && !$hasIblockAccess) {
+        echo json_encode(['success' => false, 'error' => 'Доступ запрещен']);
+        die();
+    }
+
+    $res = BookingManager::createBooking($_POST);
+    echo json_encode($res);
+    die();
+}
+*/
+
 // Персональные настройки фильтра текущего менеджера через CUserOptions
 $userListFilter = \CUserOptions::GetOption($MODULE_ID, 'list_filter', []);
 
@@ -99,7 +116,10 @@ $baseFilteredItems = array_filter($allItems, function($item) use ($centerId, $se
             strpos(mb_strtolower((string)$item['CLIENT_NAME']), $q) !== false ||
             strpos(mb_strtolower((string)$item['CLIENT_PHONE']), $q) !== false ||
             strpos(mb_strtolower((string)$item['CAR_NUMBER']), $q) !== false ||
-            strpos(mb_strtolower((string)$item['COMMENT']), $q) !== false
+            strpos(mb_strtolower((string)$item['COMMENT']), $q) !== false ||
+            strpos(mb_strtolower((string)($item['CREATOR_DISPLAY'] ?? '')), $q) !== false ||
+            strpos(mb_strtolower((string)($item['CREATED_USER_NAME'] ?? '')), $q) !== false ||
+            (!empty($item['IS_AI']) && (strpos($q, 'ии') !== false || strpos($q, 'ассистент') !== false || strpos($q, 'ai') !== false || strpos($q, '8640') !== false || strpos($q, 'леонов') !== false))
         );
         if (!$match) return false;
     }
@@ -181,6 +201,8 @@ usort($filteredItems, function($a, $b) use ($sortBy, $sortOrder) {
     $valB = $b[$sortBy] ?? '';
     
     if ($sortBy === 'ID') {
+        $cmp = (int)$valA <=> (int)$valB;
+    } elseif ($sortBy === 'CREATED_BY') {
         $cmp = (int)$valA <=> (int)$valB;
     } elseif (in_array($sortBy, ['DATE_CREATE', 'DATE_TIME', 'TIME_FIRST_INTERVAL'])) {
         $tsA = strtotime((string)$valA) ?: 0;
@@ -472,10 +494,17 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
 </style>
 
 <div class="tb-container">
-    <div class="tb-nav-tabs" style="display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 2px solid #e2e8f0; padding-bottom: 0;">
-        <a href="aikos_tirebooking_list.php?lang=<?=LANGUAGE_ID?>" class="tb-nav-tab active" style="padding: 10px 18px; font-weight: 600; text-decoration: none; color: #2563eb; border-bottom: 3px solid #2563eb; margin-bottom: -2px;">📋 Отслеживание записей</a>
-        <a href="aikos_tirebooking_analytics.php?lang=<?=LANGUAGE_ID?>" class="tb-nav-tab" style="padding: 10px 18px; font-weight: 600; text-decoration: none; color: #64748b; border-bottom: 3px solid transparent; margin-bottom: -2px;">📊 Анализ и Дашборды</a>
-        <a href="aikos_tirebooking_settings.php?lang=<?=LANGUAGE_ID?>" class="tb-nav-tab" style="padding: 10px 18px; font-weight: 600; text-decoration: none; color: #64748b; border-bottom: 3px solid transparent; margin-bottom: -2px;">⚙️ Настройки и Блокировка записей</a>
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 2px solid #e2e8f0; padding-bottom: 0;">
+        <div class="tb-nav-tabs" style="display: flex; gap: 8px;">
+            <a href="aikos_tirebooking_list.php?lang=<?=LANGUAGE_ID?>" class="tb-nav-tab active" style="padding: 10px 18px; font-weight: 600; text-decoration: none; color: #2563eb; border-bottom: 3px solid #2563eb; margin-bottom: -2px;">📋 Отслеживание записей</a>
+            <a href="aikos_tirebooking_analytics.php?lang=<?=LANGUAGE_ID?>" class="tb-nav-tab" style="padding: 10px 18px; font-weight: 600; text-decoration: none; color: #64748b; border-bottom: 3px solid transparent; margin-bottom: -2px;">📊 Анализ и Дашборды</a>
+            <a href="aikos_tirebooking_settings.php?lang=<?=LANGUAGE_ID?>" class="tb-nav-tab" style="padding: 10px 18px; font-weight: 600; text-decoration: none; color: #64748b; border-bottom: 3px solid transparent; margin-bottom: -2px;">⚙️ Настройки и Блокировка записей</a>
+        </div>
+        <?php /*
+        <button type="button" onclick="openCreateModal()" class="tb-btn tb-btn-success" style="background: linear-gradient(135deg, #16a34a, #22c55e); color: #fff; border: none; padding: 8px 16px; font-size: 13px; font-weight: 600; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 6px; box-shadow: 0 4px 6px -1px rgba(22, 163, 74, 0.2); margin-bottom: 6px;">
+            <span style="font-size: 15px;">➕</span> Создать запись
+        </button>
+        */ ?>
     </div>
 
     <div class="tb-stats-grid">
@@ -567,6 +596,7 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
                 <tr>
                     <?=$renderSortHeader('ID', 'ID')?>
                     <?=$renderSortHeader('DATE_CREATE', 'Дата создания')?>
+                    <?=$renderSortHeader('CREATED_BY', 'Кто создал')?>
                     <?=$renderSortHeader('CLIENT_NAME', 'Имя и фамилия')?>
                     <?=$renderSortHeader('CLIENT_PHONE', 'Телефон')?>
                     <?=$renderSortHeader('CAR_NUMBER', 'Гос. номер')?>
@@ -581,7 +611,7 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
             <tbody>
                 <?php if (empty($pageItems)): ?>
                     <tr>
-                        <td colspan="11" style="text-align: center; padding: 30px; color: #94a3b8;">
+                        <td colspan="12" style="text-align: center; padding: 30px; color: #94a3b8;">
                             Записи по выбранному фильтру не найдены
                         </td>
                     </tr>
@@ -605,6 +635,19 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
                         <tr onclick="showDetails(<?=htmlspecialcharsbx(json_encode($item, JSON_HEX_APOS | JSON_HEX_QUOT))?>)">
                             <td><strong>#<?=$item['ID']?></strong></td>
                             <td style="white-space: nowrap; font-size: 12px; color: #64748b;"><?=htmlspecialcharsbx($item['DATE_CREATE'])?></td>
+                            <td>
+                                <?php if (!empty($item['IS_AI'])): ?>
+                                    <span class="tb-badge" style="background: linear-gradient(135deg, #ede9fe, #dbeafe); color: #4338ca; border: 1px solid #c7d2fe; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 12px; white-space: nowrap;">
+                                        <span style="font-size: 12px;">🤖</span> ИИ Ассистент
+                                    </span>
+                                <?php elseif (!empty($item['CREATED_BY']) && $item['CREATED_BY'] > 0): ?>
+                                    <div style="font-size: 12px; color: #334155; line-height: 1.3;" title="<?=htmlspecialcharsbx($item['CREATOR_DISPLAY'] ?? '')?>">
+                                        <span style="color: #64748b; font-weight: 500;">[<?=$item['CREATED_BY']?>]</span> <?=htmlspecialcharsbx($item['CREATED_USER_NAME'] ?: 'Пользователь')?>
+                                    </div>
+                                <?php else: ?>
+                                    <span style="color: #94a3b8; font-size: 12px;">Сайт</span>
+                                <?php endif; ?>
+                            </td>
                             <td>
                                 <div style="font-weight: 600; color: #0f172a;"><?=htmlspecialcharsbx($item['CLIENT_NAME'])?></div>
                                 <?php if (!empty($item['IIN'])): ?>
@@ -692,6 +735,130 @@ require_once($_SERVER["DOCUMENT_ROOT"]."/bitrix/modules/main/include/prolog_admi
     </div>
 </div>
 
+<?php /*
+<div id="create-booking-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(15,23,42,0.6); z-index:9999; justify-content:center; align-items:center; backdrop-filter: blur(3px);">
+    <div style="background:#fff; border-radius:14px; max-width:700px; width:95%; max-height:90vh; overflow-y:auto; padding:24px; box-shadow:0 25px 50px -12px rgba(0,0,0,0.25);">
+        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #e2e8f0; padding-bottom:12px; margin-bottom:18px;">
+            <h3 style="margin:0; font-size:18px; color:#0f172a; display:flex; align-items:center; gap:8px;">
+                <span>➕</span> Новая запись на шиномонтаж
+            </h3>
+            <button onclick="closeCreateModal()" style="background:none; border:none; font-size:22px; cursor:pointer; color:#64748b; line-height:1;">✕</button>
+        </div>
+
+        <form id="create-booking-form" onsubmit="submitCreateBooking(event)">
+            <input type="hidden" name="action" value="create_booking">
+            <div id="create-error" style="display:none; background:#fef2f2; border:1px solid #fecaca; color:#b91c1c; padding:10px 14px; border-radius:6px; font-size:13px; margin-bottom:16px;"></div>
+
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+                <div>
+                    <label style="display:block; font-size:12px; font-weight:600; color:#475569; margin-bottom:4px;">Шинный центр: *</label>
+                    <select name="CENTER_ID" required class="tb-filter-select" style="width:100%;">
+                        <option value="">-- Выберите шинный центр --</option>
+                        <?php foreach ($centers as $id => $name): ?>
+                            <option value="<?=$id?>"><?=htmlspecialcharsbx($name)?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+
+                <div>
+                    <label style="display:block; font-size:12px; font-weight:600; color:#475569; margin-bottom:4px;">Рабочий пост: *</label>
+                    <select name="POST_NAME" class="tb-filter-select" style="width:100%;">
+                        <option value="пост 1" selected>Пост 1</option>
+                        <option value="пост 2">Пост 2</option>
+                        <option value="пост 3">Пост 3</option>
+                        <option value="пост 4">Пост 4</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label style="display:block; font-size:12px; font-weight:600; color:#475569; margin-bottom:4px;">Дата и время визита: *</label>
+                    <input type="datetime-local" name="VISIT_DATE" required value="<?=date('Y-m-d\TH:i')?>" class="tb-filter-input" style="width:100%;">
+                </div>
+
+                <div>
+                    <label style="display:block; font-size:12px; font-weight:600; color:#475569; margin-bottom:4px;">Имя и фамилия клиента: *</label>
+                    <input type="text" name="CLIENT_NAME" required placeholder="Например: Серик Садыков" class="tb-filter-input" style="width:100%;">
+                </div>
+
+                <div>
+                    <label style="display:block; font-size:12px; font-weight:600; color:#475569; margin-bottom:4px;">Телефон клиента: *</label>
+                    <input type="tel" name="CLIENT_PHONE" id="field-client-phone" required placeholder="+7 (701) 123-45-67" class="tb-filter-input" style="width:100%;" oninput="formatPhoneInput(this)" maxlength="18">
+                </div>
+
+                <div>
+                    <label style="display:block; font-size:12px; font-weight:600; color:#475569; margin-bottom:4px;">Гос. номер авто: *</label>
+                    <input type="text" name="CAR_NUMBER" required placeholder="Например: 111MMM16" class="tb-filter-input" style="width:100%;">
+                </div>
+
+                <div>
+                    <label style="display:block; font-size:12px; font-weight:600; color:#475569; margin-bottom:4px;">Тип кузова авто: *</label>
+                    <select name="BODY_TYPE" class="tb-filter-select" style="width:100%;">
+                        <option value="Легковой">Легковой</option>
+                        <option value="Кроссовер">Кроссовер</option>
+                        <option value="Внедорожник">Внедорожник</option>
+                        <option value="Минивэн">Минивэн</option>
+                        <option value="Пикап">Пикап</option>
+                        <option value="Грузовой">Грузовой</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label style="display:block; font-size:12px; font-weight:600; color:#475569; margin-bottom:4px;">Диаметр шин: *</label>
+                    <select name="TIRE_DIAMETER" class="tb-filter-select" style="width:100%;">
+                        <option value="R13">R13</option>
+                        <option value="R14">R14</option>
+                        <option value="R15">R15</option>
+                        <option value="R16" selected>R16</option>
+                        <option value="R17">R17</option>
+                        <option value="R18">R18</option>
+                        <option value="R19">R19</option>
+                        <option value="R20">R20</option>
+                        <option value="R21">R21</option>
+                        <option value="R22">R22</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label style="display:block; font-size:12px; font-weight:600; color:#475569; margin-bottom:4px;">Хранение шин:</label>
+                    <select name="IS_STORAGE" id="field-is-storage" class="tb-filter-select" style="width:100%;" onchange="toggleStorageContract(this.value)">
+                        <option value="Нет">Нет</option>
+                        <option value="Да">Да (на хранении)</option>
+                    </select>
+                </div>
+
+                <div id="storage-contract-group" style="display:none;">
+                    <label style="display:block; font-size:12px; font-weight:600; color:#475569; margin-bottom:4px;">Номер договора хранения:</label>
+                    <input type="text" name="STORAGE_CONTRACT" placeholder="Например: №24/EC261" class="tb-filter-input" style="width:100%;">
+                </div>
+
+                <div>
+                    <label style="display:block; font-size:12px; font-weight:600; color:#475569; margin-bottom:4px;">Уведомление клиента за час:</label>
+                    <select name="NOTIFICATION_STATUS" class="tb-filter-select" style="width:100%;">
+                        <option value="Ожидание">Ожидание</option>
+                        <option value="Уведомлен">Уведомлен</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label style="display:block; font-size:12px; font-weight:600; color:#475569; margin-bottom:4px;">ИИН клиента (необязательно):</label>
+                    <input type="text" name="IIN" maxlength="12" placeholder="12 цифр" class="tb-filter-input" style="width:100%;">
+                </div>
+            </div>
+
+            <div style="margin-top:14px;">
+                <label style="display:block; font-size:12px; font-weight:600; color:#475569; margin-bottom:4px;">Комментарий / Примечание:</label>
+                <textarea name="COMMENT" rows="2" placeholder="Дополнительные пожелания клиента или детали услуги..." class="tb-filter-input" style="width:100%; height:60px; resize:vertical;"></textarea>
+            </div>
+
+            <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:20px; border-top:1px solid #e2e8f0; padding-top:16px;">
+                <button type="button" class="tb-btn tb-btn-secondary" onclick="closeCreateModal()">Отмена</button>
+                <button type="submit" id="btn-submit-create" class="tb-btn tb-btn-primary" style="background: linear-gradient(135deg, #16a34a, #22c55e);">💾 Создать запись</button>
+            </div>
+        </form>
+    </div>
+</div>
+*/ ?>
+
 <script>
 function filterByPeriod(from, to) {
     document.getElementById('field-date-from').value = from;
@@ -699,12 +866,119 @@ function filterByPeriod(from, to) {
     document.getElementById('tb-filter-form').submit();
 }
 
+/*
+function formatPhoneInput(input) {
+    var val = input.value.replace(/\D/g, '');
+    if (!val) {
+        input.value = '';
+        return;
+    }
+    
+    // Если ввод начат с 8 или 7, заменяем на 7
+    if (val[0] === '8' || val[0] === '7') {
+        val = '7' + val.substring(1);
+    } else {
+        val = '7' + val;
+    }
+    
+    val = val.substring(0, 11);
+    
+    var formatted = '+7';
+    if (val.length > 1) {
+        formatted += ' (' + val.substring(1, 4);
+    }
+    if (val.length >= 4) {
+        formatted += ') ';
+    }
+    if (val.length > 4) {
+        formatted += val.substring(4, 7);
+    }
+    if (val.length >= 7) {
+        formatted += '-';
+    }
+    if (val.length > 7) {
+        formatted += val.substring(7, 9);
+    }
+    if (val.length >= 9) {
+        formatted += '-';
+    }
+    if (val.length > 9) {
+        formatted += val.substring(9, 11);
+    }
+    
+    input.value = formatted;
+}
+
+function openCreateModal() {
+    document.getElementById('create-error').style.display = 'none';
+    document.getElementById('create-booking-form').reset();
+    toggleStorageContract('Нет');
+    document.getElementById('create-booking-modal').style.display = 'flex';
+}
+
+function closeCreateModal() {
+    document.getElementById('create-booking-modal').style.display = 'none';
+}
+
+function toggleStorageContract(val) {
+    var group = document.getElementById('storage-contract-group');
+    if (val === 'Да') {
+        group.style.display = 'block';
+    } else {
+        group.style.display = 'none';
+    }
+}
+
+function submitCreateBooking(e) {
+    e.preventDefault();
+    var form = document.getElementById('create-booking-form');
+    var btn = document.getElementById('btn-submit-create');
+    var errBox = document.getElementById('create-error');
+    
+    errBox.style.display = 'none';
+    btn.disabled = true;
+    btn.innerText = '⏳ Создание...';
+
+    var formData = new FormData(form);
+
+    fetch('aikos_tirebooking_list.php', {
+        method: 'POST',
+        body: formData
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(res) {
+        btn.disabled = false;
+        btn.innerText = '💾 Создать запись';
+        if (res.success) {
+            closeCreateModal();
+            window.location.reload();
+        } else {
+            errBox.innerText = res.error || 'Произошла ошибка при сохранении';
+            errBox.style.display = 'block';
+        }
+    })
+    .catch(function(err) {
+        btn.disabled = false;
+        btn.innerText = '💾 Создать запись';
+        errBox.innerText = 'Сетевая ошибка: ' + err.message;
+        errBox.style.display = 'block';
+    });
+}
+*/
+
 function showDetails(item) {
     document.getElementById('modal-title').innerText = 'Запись на шиномонтаж #' + item.ID;
     
     var storageStr = item.IS_STORAGE || 'Нет';
     if (item.STORAGE_CONTRACT) {
         storageStr += ' (Договор №' + item.STORAGE_CONTRACT + ')';
+    }
+
+    var creatorText = 'Сайт';
+    if (item.IS_AI) {
+        creatorText = '🤖 ИИ Ассистент';
+    } else if (item.CREATED_BY && item.CREATED_BY > 0) {
+        creatorText = '[' + item.CREATED_BY + '] ' + (item.CREATED_USER_NAME || 'Пользователь');
     }
 
     var html = '<div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">' +
@@ -715,6 +989,7 @@ function showDetails(item) {
         '<div><strong>Диаметр шин:</strong> ' + (item.TIRE_DIAMETER || '—') + '</div>' +
         '<div><strong>Дата визита:</strong> ' + (item.DATE_TIME || '—') + '</div>' +
         '<div><strong>Дата создания:</strong> ' + (item.DATE_CREATE || '—') + '</div>' +
+        '<div><strong>Кто создал:</strong> ' + creatorText + '</div>' +
         '<div><strong>Хранение:</strong> ' + storageStr + '</div>' +
         '<div><strong>Уведомление:</strong> ' + (item.NOTIFICATION_STATUS || item.NAME || '—') + '</div>' +
         (item.IIN ? '<div><strong>ИИН:</strong> ' + item.IIN + '</div>' : '') +
