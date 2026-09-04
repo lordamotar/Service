@@ -106,7 +106,7 @@ class AnalyticsManager
     {
         // Проверка кеша
         $cache = Cache::createInstance();
-        $cacheId = 'an_data_v21_' . md5(serialize($filterParams));
+        $cacheId = 'an_data_v22_' . md5(serialize($filterParams));
         if ($cache->initCache(10, $cacheId, '/aikos_tirebooking/analytics/')) {
             return $cache->getVars();
         }
@@ -122,8 +122,14 @@ class AnalyticsManager
         if ($centerId > 0) {
             $sqlFilter['PROPERTY_CENTER'] = $centerId;
         }
+        if ($dateFrom !== '') {
+            $sqlFilter['DATE_FROM'] = $dateFrom;
+        }
+        if ($dateTo !== '') {
+            $sqlFilter['DATE_TO'] = $dateTo;
+        }
 
-        $rawItems = BookingManager::getList($sqlFilter, ['ID' => 'DESC'], 5000);
+        $rawItems = BookingManager::getList($sqlFilter, ['ID' => 'DESC'], 0);
 
         // Частота визитов по телефонам
         $phoneCounts = [];

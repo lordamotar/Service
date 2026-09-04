@@ -80,8 +80,17 @@ $selectedCenterName = $centers[$centerId] ?? '';
 // Полное общее количество всех элементов инфоблока в БД (100,000+)
 $totalDbCount = BookingManager::getCount();
 
-// Загрузка активных элементов для анализа и отображения
-$allItems = BookingManager::getList([], ['ID' => 'DESC'], 5000);
+// Формируем параметры фильтра для выборки
+$dbFilter = [];
+if ($dateFrom !== '') {
+    $dbFilter['DATE_FROM'] = $dateFrom;
+}
+if ($dateTo !== '') {
+    $dbFilter['DATE_TO'] = $dateTo;
+}
+
+// Загрузка элементов для анализа и отображения (по фильтру дат или с начала 2026 года)
+$allItems = BookingManager::getList($dbFilter, ['ID' => 'DESC'], 0);
 
 // Фильтрация по центру и поиску
 $baseFilteredItems = array_filter($allItems, function($item) use ($centerId, $selectedCenterName, $searchQuery) {
