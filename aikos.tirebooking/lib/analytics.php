@@ -19,13 +19,28 @@ class AnalyticsManager
     }
 
     /**
+     * Если строка смешанная (латиница + кириллица, например "Сrossover", где первая "С" русская),
+     * добавляет к строке копию с русскими буквами-двойниками, заменёнными на латинские, чтобы строка нашлась по шаблонам.
+     */
+    protected static function foldLookalikes($str)
+    {
+        if (!preg_match('/[a-z]/iu', $str) || !preg_match('/\p{Cyrillic}/u', $str)) {
+            return $str;
+        }
+        return $str . ' ' . strtr($str, [
+            'а' => 'a', 'в' => 'b', 'е' => 'e', 'к' => 'k', 'м' => 'm', 'н' => 'h',
+            'о' => 'o', 'р' => 'p', 'с' => 'c', 'т' => 't', 'у' => 'y', 'х' => 'x',
+        ]);
+    }
+
+    /**
      * Определение типа кузова (строго в соответствии со структурой шиномонтажа: Легковой, Кроссовер, Внедорожник, Минивэн, Пикап и др.)
      */
     public static function detectBodyType($item)
     {
         $directVal = trim((string)($item['BODY_TYPE'] ?? $item['CAR_BODY'] ?? ''));
         if ($directVal !== '') {
-            $dLower = mb_strtolower($directVal);
+            $dLower = self::foldLookalikes(mb_strtolower($directVal));
             if (preg_match('/(кросс|cross|kross|паркет)/iu', $dLower)) {
                 return 'Кроссовер';
             }
@@ -54,7 +69,7 @@ class AnalyticsManager
             $item['CAR_NUMBER'] ?? ''
         ];
         
-        $str = mb_strtolower(implode(' ', $fieldsToSearch));
+        $str = self::foldLookalikes(mb_strtolower(implode(' ', $fieldsToSearch)));
 
         if (preg_match('/(кросс|cross|kross|паркет)/iu', $str)) {
             return 'Кроссовер';
